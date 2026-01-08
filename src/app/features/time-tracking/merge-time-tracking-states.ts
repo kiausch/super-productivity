@@ -55,8 +55,8 @@ export const mergeTimeTrackingStates = ({
       archiveYoung: archiveYoung.tag,
       archiveOld: archiveOld.tag,
     }),
+    workSession: current.workSession, // todo: archive mechanism for timetracking session
     // lastFlush: current.lastFlush,
-    // task: current.task,
   };
 };
 
