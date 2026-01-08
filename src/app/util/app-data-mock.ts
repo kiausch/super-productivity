@@ -44,6 +44,7 @@ export const createAppDataCompleteMock = (): AppDataComplete => ({
   timeTracking: {
     project: {},
     tag: {},
+    workSession: [],
   },
 
   archiveYoung: {

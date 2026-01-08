@@ -6,6 +6,23 @@ export { ArchiveModel } from '../archive/archive.model';
 export type TTModelId = string;
 export type TTDate = string;
 
+/**
+ * Individual time tracking session
+ * Uses shortened property names to reduce storage size
+ * id: unique identifier (UUID/nanoid) - required for editing/sync
+ * tid: task ID
+ * d: date in 'YYYY-MM-DD' format (user's local date)
+ * s: start timestamp in ms (UTC) - optional for manual entries
+ * t: duration in milliseconds
+ */
+export interface TimeSession {
+  id: string;
+  tid: string;
+  d: string;
+  s?: number;
+  t: number;
+}
+
 export type TTModelIdMap<T> = Omit<
   Record<TTModelId, T>,
   keyof TTWorkContextData | keyof TimeTrackingState | 'workStart' | 'workEnd'
@@ -54,6 +71,7 @@ export type TTWorkContextSessionMap = TTModelIdMap<TTWorkSessionByDateMap>;
 export interface TimeTrackingState {
   project: TTWorkContextSessionMap;
   tag: TTWorkContextSessionMap;
+  workSession: TimeSession[]; // array of time tracking sessions per task
   // somehow can't be optional for ngrx
 }
 

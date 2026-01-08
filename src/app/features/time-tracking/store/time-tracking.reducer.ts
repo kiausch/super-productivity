@@ -16,6 +16,7 @@ export const TIME_TRACKING_FEATURE_KEY = 'timeTracking' as const;
 export const initialTimeTrackingState: TimeTrackingState = {
   tag: {},
   project: {},
+  workSession: [],
   // lastFlush: 0,
 } as const;
 
@@ -100,6 +101,11 @@ export const timeTrackingReducer = createReducer(
       },
     };
   }),
+
+  on(TimeTrackingActions.addTimeSession, (state, { timeSession }) => ({
+    ...state,
+    workSession: [...state.workSession, timeSession],
+  })),
 );
 
 export const timeTrackingFeature = createFeature({
