@@ -1,0 +1,145 @@
+<div class="table-wrapper mat-elevation-z1">
+  <table
+    [dataSource]="logEntries()"
+    class="summary-table"
+    mat-table
+  >
+    <ng-container matColumnDef="title">
+      <th
+        *matHeaderCellDef
+        mat-header-cell
+      >
+        <!-- {{ T.F.TASK.SUMMARY_TABLE.TASK | translate }} -->
+        Title
+      </th>
+      <td
+        *matCellDef="let entry"
+        mat-cell
+      >
+        <div
+          [class.isDone]="entry.task?.isDone"
+          class="task-title"
+        >
+          @if (entry.icon) {
+            <mat-icon>{{ entry.icon }}</mat-icon>
+          }
+          <span>{{ entry.description }}</span>
+          @if (entry.type === 'unaccounted') {
+            <span>
+              <mat-icon>add_task</mat-icon>
+              <mat-icon>coffee</mat-icon>
+            </span>
+          }
+        </div>
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="timeStart">
+      <th
+        *matHeaderCellDef
+        mat-header-cell
+      >
+        Start
+      </th>
+      <td
+        *matCellDef="let entry"
+        mat-cell
+      >
+        @if (entry.start !== undefined) {
+          <span>{{ entry.start | momentFormat: 'HH:mm' }}</span>
+        }
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="timeEnd">
+      <th
+        *matHeaderCellDef
+        mat-header-cell
+      >
+        End
+      </th>
+      <td
+        *matCellDef="let entry"
+        mat-cell
+      >
+        @if (entry.end !== undefined) {
+          <span>{{ entry.end | momentFormat: 'HH:mm' }}</span>
+        }
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="timeSpentToday">
+      <th
+        *matHeaderCellDef
+        mat-header-cell
+      >
+        <!-- {{ T.F.TASK.SUMMARY_TABLE.SPENT_TODAY | translate }} -->
+        Duration
+      </th>
+      <td
+        *matCellDef="let entry"
+        mat-cell
+      >
+        @if (entry.duration !== undefined) {
+          <span>{{ entry.duration | msToClockString }}</span>
+        }
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="nDash">
+      <th
+        *matHeaderCellDef
+        mat-header-cell
+      ></th>
+      <td
+        *matCellDef="let entry"
+        mat-cell
+      >
+        <span
+          class="dash"
+          [class.hidden]="entry.type !== 'end' && !entry?.start"
+        >
+          &ndash;
+        </span>
+      </td>
+    </ng-container>
+
+    <ng-container matColumnDef="eq">
+      <th
+        *matHeaderCellDef
+        mat-header-cell
+      ></th>
+      <td
+        *matCellDef="let entry"
+        mat-cell
+      >
+        <span
+          class="eq"
+          [class.hidden]="!entry?.end"
+        >
+          =
+        </span>
+      </td>
+    </ng-container>
+
+    <tr
+      *matHeaderRowDef="[
+        'title',
+        'timeStart',
+        'nDash',
+        'timeEnd',
+        'eq',
+        'timeSpentToday',
+      ]"
+      mat-header-row
+    ></tr>
+    <tr
+      *matRowDef="
+        let row;
+        columns: ['title', 'timeStart', 'nDash', 'timeEnd', 'eq', 'timeSpentToday']
+      "
+      mat-row
+      [attr.class]="row.type"
+    ></tr>
+  </table>
+</div>
