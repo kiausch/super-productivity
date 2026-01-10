@@ -157,6 +157,9 @@
   >
     <mat-tab [label]="'1. ' + (T.PDS.REVIEW_TASKS | translate)">
       <section class="tab-inner">
+        <daily-worklog-table
+          [flatTasks]="tasksWorkedOnOrDoneOrRepeatableFlat$ | async"
+        ></daily-worklog-table>
         @if (tasksWorkedOnOrDoneOrRepeatableFlat$ | async; as tasks) {
           @if (tasks?.length) {
             <task-summary-tables

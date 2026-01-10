@@ -76,6 +76,7 @@ import {
   SimpleCounterSummaryItemComponent,
 } from './simple-counter-summary-item/simple-counter-summary-item.component';
 import { MetricService } from '../../features/metric/metric.service';
+import { DailyWorklogTableComponent } from './daily-worklog-table/daily-worklog-table.component';
 
 const MAGIC_YESTERDAY_MARGIN = 4 * 60 * 60 * 1000;
 
@@ -105,6 +106,7 @@ const MAGIC_YESTERDAY_MARGIN = 4 * 60 * 60 * 1000;
     InlineMarkdownComponent,
     MatIconButton,
     SimpleCounterSummaryItemComponent,
+    DailyWorklogTableComponent,
   ],
   animations: [expandAnimation],
 })
@@ -246,6 +248,17 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
   end$: Observable<number | undefined> = this.dayStr$.pipe(
     switchMap((dayStr) => this.workContextService.getWorkEnd$(dayStr)),
   );
+  startToEnd$: Observable<number | undefined> = combineLatest([
+    this.started$,
+    this.end$,
+  ]).pipe(
+    map(([start, end]) => {
+      if (!start || !end) {
+        return undefined;
+      }
+      return end - start;
+    }),
+  );
 
   breakTime$: Observable<number | undefined> = this.dayStr$.pipe(
     switchMap((dayStr) => this.workContextService.getBreakTime$(dayStr)),
@@ -256,6 +269,31 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
 
   isBreakTrackingSupport$: Observable<boolean> = this.configService.idle$.pipe(
     map((cfg) => cfg && cfg.isEnableIdleTimeTracking),
+  );
+
+  presenceTime$: Observable<number | undefined> = combineLatest([
+    this.startToEnd$,
+    this.breakTime$,
+  ]).pipe(
+    map(([startToEnd, breakTime]) => {
+      if (!startToEnd) {
+        return undefined;
+      }
+      const presenceTime_ = startToEnd - (breakTime ?? 0);
+      return presenceTime_ > 0 ? presenceTime_ : 0;
+    }),
+  );
+
+  unaccountedTime$: Observable<number | undefined> = combineLatest([
+    this.presenceTime$,
+    this.timeWorked$,
+  ]).pipe(
+    map(([presenceTime, timeWorked]) => {
+      if (!presenceTime) {
+        return undefined;
+      }
+      return presenceTime - (timeWorked ?? 0);
+    }),
   );
 
   actionsToExecuteBeforeFinishDay: Action[] = [{ type: 'FINISH_DAY' }];
