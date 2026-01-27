@@ -106,6 +106,13 @@ export const timeTrackingReducer = createReducer(
     ...state,
     workSession: [...state.workSession, timeSession],
   })),
+
+  on(TimeTrackingActions.updateTimeSession, (state, { sessionId, updates }) => ({
+    ...state,
+    workSession: state.workSession.map((session) =>
+      session.id === sessionId ? { ...session, ...updates } : session,
+    ),
+  })),
 );
 
 export const timeTrackingFeature = createFeature({

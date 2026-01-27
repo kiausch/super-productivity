@@ -64,6 +64,10 @@ export const TimeTrackingActions = createActionGroup({
     'Add time session': props<{
       timeSession: TimeSession;
     }>(),
+    'Update Time Session': props<{
+      sessionId: string;
+      updates: Partial<TimeSession>;
+    }>(),
     'Update whole State': props<{
       newState: TimeTrackingState;
     }>(),
