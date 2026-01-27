@@ -3,7 +3,6 @@ import { Actions, createEffect, ofType } from '@ngrx/effects';
 import { map, tap } from 'rxjs/operators';
 import { setCurrentTask, unsetCurrentTask } from '../../tasks/store/task.actions';
 import { TimeTrackingActions } from './time-tracking.actions';
-import { DateService } from '../../../core/date/date.service';
 import { nanoid } from 'nanoid';
 import { formatDateYYYYMMDD } from '../../../util/format-date-yyyy-mm-dd';
 
@@ -12,9 +11,8 @@ import { formatDateYYYYMMDD } from '../../../util/format-date-yyyy-mm-dd';
  * emits a TimeTracking 'Add task session' action when tracking is stopped.
  */
 @Injectable()
-export class TaskSessionEffects {
+export class TimeSessionEffects {
   private _actions$ = inject(Actions);
-  private _dateService = inject(DateService);
 
   // map of taskId -> startTs
   private _startMap = new Map<string, number>();
@@ -57,6 +55,11 @@ export class TaskSessionEffects {
         this._startMap.delete(taskId);
         this._lastStartedTaskId = null;
 
+        // only save session if duration is longer than 10 seconds
+        if (duration < 10000) {
+          return { type: '[TimeTracking] Noop' } as any;
+        }
+
         // Create TimeSession entry
         const timeSession = {
           id: nanoid(),
@@ -74,4 +77,4 @@ export class TaskSessionEffects {
   );
 }
 
-export const effects = [TaskSessionEffects];
+export const effects = [TimeSessionEffects];

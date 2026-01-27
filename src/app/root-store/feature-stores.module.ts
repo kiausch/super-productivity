@@ -82,7 +82,7 @@ import { SyncEffects } from '../imex/sync/sync.effects';
 import { boardsFeature } from '../features/boards/store/boards.reducer';
 import { timeTrackingFeature } from '../features/time-tracking/store/time-tracking.reducer';
 import { ArchiveOperationHandlerEffects } from '../op-log/apply/archive-operation-handler.effects';
-import { TaskSessionEffects } from '../features/time-tracking/store/task-session.effects';
+import { TimeSessionEffects } from '../features/time-tracking/store/time-session.effects';
 import { plannerFeature } from '../features/planner/store/planner.reducer';
 import { PlannerEffects } from '../features/planner/store/planner.effects';
 import { AppStateEffects } from './app-state/app-state.effects';
@@ -162,7 +162,7 @@ import {
 
     StoreModule.forFeature(timeTrackingFeature),
     EffectsModule.forFeature([ArchiveOperationHandlerEffects]),
-    EffectsModule.forFeature([TaskSessionEffects]),
+    EffectsModule.forFeature([TimeSessionEffects]),
 
     StoreModule.forFeature(plannerFeature),
     EffectsModule.forFeature([PlannerEffects]),

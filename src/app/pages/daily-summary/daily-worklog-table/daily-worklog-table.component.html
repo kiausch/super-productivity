@@ -1,6 +1,6 @@
 <div class="table-wrapper mat-elevation-z1">
   <table
-    [dataSource]="logEntries()"
+    [dataSource]="tableEntries()"
     class="summary-table"
     mat-table
   >
@@ -46,7 +46,11 @@
         mat-cell
       >
         @if (entry.start !== undefined) {
-          <span>{{ entry.start | momentFormat: 'HH:mm' }}</span>
+          <inline-input
+            type="time"
+            [value]="entry.start | momentFormat: 'HH:mm'"
+            (changed)="onStartChanged(entry, $event)"
+          />
         }
       </td>
     </ng-container>
@@ -63,7 +67,11 @@
         mat-cell
       >
         @if (entry.end !== undefined) {
-          <span>{{ entry.end | momentFormat: 'HH:mm' }}</span>
+          <inline-input
+            type="time"
+            [value]="entry.end | momentFormat: 'HH:mm'"
+            (changed)="onEndChanged(entry, $event)"
+          />
         }
       </td>
     </ng-container>
@@ -81,7 +89,12 @@
         mat-cell
       >
         @if (entry.duration !== undefined) {
-          <span>{{ entry.duration | msToClockString }}</span>
+          <inline-input
+            type="duration"
+            [displayValue]="entry.duration | msToClockString"
+            [value]="entry.duration"
+            (changed)="onDurationChanged(entry, $event)"
+          />
         }
       </td>
     </ng-container>

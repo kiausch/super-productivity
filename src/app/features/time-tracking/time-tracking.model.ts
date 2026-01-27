@@ -71,7 +71,7 @@ export type TTWorkContextSessionMap = TTModelIdMap<TTWorkSessionByDateMap>;
 export interface TimeTrackingState {
   project: TTWorkContextSessionMap;
   tag: TTWorkContextSessionMap;
-  workSession: TimeSession[]; // array of time tracking sessions per task
+  workSession: TimeSession[];
   // somehow can't be optional for ngrx
 }
 
