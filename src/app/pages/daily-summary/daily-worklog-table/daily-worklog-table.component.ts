@@ -167,60 +167,76 @@ export class DailyWorklogTableComponent {
   );
 
   onStartChanged(entry: TableEntry, ev: string): void {
-    if (entry.session) {
-      const newStartTime = new Date(`${this.dayStr} ${ev}`).getTime();
+    const newStartTime = new Date(`${this.dayStr} ${ev}`).getTime();
 
-      this._store$.dispatch({
-        type: '[TimeTracking] Update Time Session',
-        sessionId: entry.session.id,
-        updates: {
-          s: newStartTime,
-        },
-      });
+    if (newStartTime && !isNaN(newStartTime)) {
+      if (entry.session) {
+        this._store$.dispatch({
+          type: '[TimeTracking] Update Time Session',
+          sessionId: entry.session.id,
+          updates: {
+            s: newStartTime,
+          },
+        });
+      } else if (entry.type === 'start') {
+        this._workContextService.updateWorkStartForActiveContext(
+          this.dayStr,
+          newStartTime,
+        );
+      }
     }
   }
 
   onEndChanged(entry: TableEntry, ev: string): void {
-    if (entry.session) {
-      const newEndTime = new Date(`${this.dayStr} ${ev}`).getTime();
+    const newEndTime = new Date(`${this.dayStr} ${ev}`).getTime();
+    if (newEndTime && !isNaN(newEndTime)) {
+      if (entry.session) {
+        let newDuration = entry.session.t;
+        let newStartTime = entry.session.s;
 
-      let newDuration = entry.session.t;
-      let newStartTime = entry.session.s;
+        // if start is set, calculate new duration
+        if (entry.session.s && newEndTime > entry.session.s) {
+          newDuration = newEndTime - entry.session.s;
+        }
+        // if start is empty but duration is available, calculate start time
+        else if (entry.session.t && !entry.session.s) {
+          newStartTime = newEndTime - entry.session.t;
+        }
+        // else do nothing
+        else {
+          return;
+        }
 
-      // if start is set, calculate new duration
-      if (entry.session.s && newEndTime > entry.session.s) {
-        newDuration = newEndTime - entry.session.s;
+        this._store$.dispatch({
+          type: '[TimeTracking] Update Time Session',
+          sessionId: entry.session.id,
+          updates: {
+            s: newStartTime,
+            t: newDuration,
+          },
+        });
+      } else if (entry.type === 'end') {
+        this._workContextService.updateWorkEndForActiveContext(this.dayStr, newEndTime);
       }
-      // if start is empty but duration is available, calculate start time
-      else if (entry.session.t && !entry.session.s) {
-        newStartTime = newEndTime - entry.session.t;
-      }
-      // else do nothing
-      else {
-        return;
-      }
-
-      this._store$.dispatch({
-        type: '[TimeTracking] Update Time Session',
-        sessionId: entry.session.id,
-        updates: {
-          s: newStartTime,
-          t: newDuration,
-        },
-      });
     }
   }
 
-  onDurationChanged(entry: TableEntry, ev: string): void {
-    if (entry.session) {
-      const newDurationMs = ev;
-      this._store$.dispatch({
-        type: '[TimeTracking] Update Time Session',
-        sessionId: entry.session.id,
-        updates: {
-          t: newDurationMs,
-        },
-      });
+  onDurationChanged(entry: TableEntry, ev: number): void {
+    const newDurationMs = ev;
+
+    if (newDurationMs && !isNaN(newDurationMs)) {
+      if (entry.session) {
+        this._store$.dispatch({
+          type: '[TimeTracking] Update Time Session',
+          sessionId: entry.session.id,
+          updates: {
+            t: newDurationMs,
+          },
+        });
+      } else if (entry.type === 'end') {
+        const newEndTime = (this.workStart() || 0) + newDurationMs;
+        this._workContextService.updateWorkEndForActiveContext(this.dayStr, newEndTime);
+      }
     }
   }
 }
