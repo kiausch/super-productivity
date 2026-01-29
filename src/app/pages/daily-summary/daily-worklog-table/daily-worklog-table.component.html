@@ -89,12 +89,18 @@
         mat-cell
       >
         @if (entry.duration !== undefined) {
-          <inline-input
-            type="duration"
-            [displayValue]="entry.duration | msToClockString"
-            [value]="entry.duration"
-            (changed)="onDurationChanged(entry, $event)"
-          />
+          @if (entry.type !== 'unaccounted') {
+            <inline-input
+              type="duration"
+              [displayValue]="entry.duration | msToClockString"
+              [value]="entry.duration"
+              (changed)="onDurationChanged(entry, $event)"
+            />
+          } @else {
+            <span>
+              {{ entry.duration | msToClockString }}
+            </span>
+          }
         }
       </td>
     </ng-container>
