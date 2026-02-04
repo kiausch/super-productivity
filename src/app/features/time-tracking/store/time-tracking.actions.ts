@@ -68,6 +68,9 @@ export const TimeTrackingActions = createActionGroup({
       sessionId: string;
       updates: Partial<TimeSession>;
     }>(),
+    'Delete Time Session': props<{
+      sessionId: string;
+    }>(),
     'Update whole State': props<{
       newState: TimeTrackingState;
     }>(),

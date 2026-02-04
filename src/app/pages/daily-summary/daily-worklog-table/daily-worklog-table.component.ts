@@ -261,4 +261,10 @@ export class DailyWorklogTableComponent {
   addTask(): void {
     // TODO: implement
   }
+
+  deleteEntry(entry: TableEntry): void {
+    if (entry.session) {
+      this._sessionService.deleteSession(entry.session.id);
+    }
+  }
 }

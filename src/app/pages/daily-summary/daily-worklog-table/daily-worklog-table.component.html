@@ -18,30 +18,12 @@
       >
         <div
           [class.isDone]="entry.task?.isDone"
-          class="task-title"
+          class="entry-title"
         >
           @if (entry.icon) {
             <mat-icon>{{ entry.icon }}</mat-icon>
           }
           <span>{{ entry.description }}</span>
-          @if (entry.type === 'unaccounted') {
-            <span>
-              <button
-                [matTooltip]="'Add Task'"
-                (click)="addTask()"
-                mat-icon-button
-              >
-                <mat-icon>add_task</mat-icon>
-              </button>
-              <button
-                [matTooltip]="'Add Break'"
-                (click)="addBreak()"
-                mat-icon-button
-              >
-                <mat-icon>coffee</mat-icon>
-              </button>
-            </span>
-          }
         </div>
       </td>
     </ng-container>
@@ -122,6 +104,73 @@
       </td>
     </ng-container>
 
+    <ng-container matColumnDef="actions">
+      <th
+        *matHeaderCellDef
+        mat-header-cell
+      >
+        <!-- {{ T.F.TASK.SUMMARY_TABLE.ACTIONS | translate }} -->
+        Actions
+      </th>
+      <td
+        *matCellDef="let entry"
+        mat-cell
+        class="entry-actions"
+      >
+        @if (entry.type === 'task' || entry.type === 'break') {
+          <button
+            mat-icon-button
+            (click)="deleteEntry(entry)"
+            class="delete-entry"
+            [title]="'Delete Entry'"
+            aria-label="Delete Entry"
+          >
+            <mat-icon>delete</mat-icon>
+          </button>
+        }
+        @if (entry.type === 'task' && entry.task) {
+          <button
+            (click)="toggleTaskDone(entry.task)"
+            [class.isDone]="entry.task.isDone"
+            [title]="T.F.TASK.SUMMARY_TABLE.TOGGLE_DONE | translate"
+            class="check-done"
+            mat-icon-button
+          >
+            <mat-icon
+              aria-label="Mark as undone"
+              class="undo"
+              >undo
+            </mat-icon>
+            <mat-icon
+              aria-label="Mark as done"
+              class="check"
+              >check
+            </mat-icon>
+          </button>
+        }
+        @if (entry.type === 'unaccounted') {
+          <span>
+            <button
+              [title]="'Add Task'"
+              aria-label="Add Task"
+              (click)="addTask()"
+              mat-icon-button
+            >
+              <mat-icon>add_task</mat-icon>
+            </button>
+            <button
+              [title]="'Add Break'"
+              aria-label="Add Break"
+              (click)="addBreak()"
+              mat-icon-button
+            >
+              <mat-icon>coffee</mat-icon>
+            </button>
+          </span>
+        }
+      </td>
+    </ng-container>
+
     <ng-container matColumnDef="nDash">
       <th
         *matHeaderCellDef
@@ -166,13 +215,22 @@
         'timeEnd',
         'eq',
         'timeSpentToday',
+        'actions',
       ]"
       mat-header-row
     ></tr>
     <tr
       *matRowDef="
         let row;
-        columns: ['title', 'timeStart', 'nDash', 'timeEnd', 'eq', 'timeSpentToday']
+        columns: [
+          'title',
+          'timeStart',
+          'nDash',
+          'timeEnd',
+          'eq',
+          'timeSpentToday',
+          'actions',
+        ]
       "
       mat-row
       [attr.class]="row.type"

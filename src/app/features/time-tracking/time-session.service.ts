@@ -38,4 +38,11 @@ export class TimeSessionService {
       timeSession: newSession,
     });
   }
+
+  deleteSession(sessionId: string): void {
+    this._store.dispatch({
+      type: '[TimeTracking] Delete Time Session',
+      sessionId,
+    });
+  }
 }

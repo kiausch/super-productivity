@@ -44,7 +44,7 @@
     }
   }
 
-  tr td {
+  .entry-title {
     mat-icon {
       font-size: 1.4em;
       width: 1.4em;
@@ -102,5 +102,54 @@
 
   span.hidden {
     display: none;
+  }
+}
+
+.entry-actions {
+  button {
+    opacity: 0;
+  }
+  &:hover {
+    button {
+      opacity: 1 !important;
+    }
+  }
+}
+
+.check-done {
+  .check,
+  .undo {
+    opacity: 0;
+  }
+
+  .undo {
+    margin-right: -24px;
+  }
+
+  &:focus,
+  &:hover {
+    mat-icon {
+      animation: var(--transition-duration-m) success-btn-ani linear;
+    }
+
+    .check {
+      opacity: 1;
+    }
+  }
+
+  &.isDone {
+    .check {
+      opacity: 1;
+    }
+
+    &:hover {
+      .check {
+        opacity: 0;
+      }
+
+      .undo {
+        opacity: 1;
+      }
+    }
   }
 }
