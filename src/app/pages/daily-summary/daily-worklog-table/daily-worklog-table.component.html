@@ -26,8 +26,20 @@
           <span>{{ entry.description }}</span>
           @if (entry.type === 'unaccounted') {
             <span>
-              <mat-icon>add_task</mat-icon>
-              <mat-icon>coffee</mat-icon>
+              <button
+                [matTooltip]="'Add Task'"
+                (click)="addTask()"
+                mat-icon-button
+              >
+                <mat-icon>add_task</mat-icon>
+              </button>
+              <button
+                [matTooltip]="'Add Break'"
+                (click)="addBreak()"
+                mat-icon-button
+              >
+                <mat-icon>coffee</mat-icon>
+              </button>
             </span>
           }
         </div>
@@ -45,7 +57,7 @@
         *matCellDef="let entry"
         mat-cell
       >
-        @if (entry.start !== undefined) {
+        @if (entry.type !== 'unaccounted' && entry.type !== 'end') {
           <inline-input
             type="time"
             [value]="entry.start | momentFormat: 'HH:mm'"
@@ -66,7 +78,12 @@
         *matCellDef="let entry"
         mat-cell
       >
-        @if (entry.end !== undefined) {
+        @if (
+          (entry.type !== 'unaccounted' &&
+            entry.type !== 'start' &&
+            entry.start !== undefined) ||
+          entry.type === 'end'
+        ) {
           <inline-input
             type="time"
             [value]="entry.end | momentFormat: 'HH:mm'"

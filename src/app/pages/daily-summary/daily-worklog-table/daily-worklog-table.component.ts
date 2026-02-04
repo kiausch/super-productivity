@@ -48,6 +48,9 @@ interface TableEntry {
   session: TimeSession | undefined;
 }
 
+// todo: move to const file, maybe make it a const task, so that we can use accumulation functions on it
+const breakTaskId = 'BREAK';
+
 @Component({
   selector: 'daily-worklog-table',
   templateUrl: './daily-worklog-table.component.html',
@@ -114,23 +117,20 @@ export class DailyWorklogTableComponent {
             task: task,
             session: session,
           });
+        } else if (session.tid === breakTaskId) {
+          ret.push({
+            type: 'break',
+            description: 'Break',
+            icon: 'coffee',
+            start: session.s,
+            end: session.s ? session.s + session.t : undefined,
+            duration: session.t,
+            task: undefined,
+            session: session,
+          });
         }
       }
     }
-
-    // add a break (mock start, duration from break duration)
-    ret.splice(1, 0, {
-      type: 'break',
-      description: 'Break',
-      icon: 'coffee',
-      // eslint-disable-next-line no-mixed-operators
-      start: (this.workStart() || 0) + 3.5 * 60 * 60 * 1000,
-      // eslint-disable-next-line no-mixed-operators
-      end: (this.workStart() || 0) + 3.5 * 60 * 60 * 1000 + (this.breakTime() || 0),
-      duration: this.breakTime(),
-      task: undefined,
-      session: undefined,
-    });
 
     // unaccounted time
     ret.push({
@@ -138,7 +138,7 @@ export class DailyWorklogTableComponent {
       description: 'Time not Spent on Tasks or Breaks',
       start: undefined,
       end: undefined,
-      duration: (this.workEnd() || 0) - (this.workStart() || 0) - (this.workTime() || 0),
+      duration: this.unaccountedTime(),
       task: undefined,
       session: undefined,
     });
@@ -149,34 +149,55 @@ export class DailyWorklogTableComponent {
       icon: 'logout',
       start: undefined,
       end: this.workEnd(),
-      duration: (this.workEnd() || 0) - (this.workStart() || 0),
+      duration: this.workTime(),
       task: undefined,
       session: undefined,
     });
 
-    return ret;
+    return ret.sort((a, b) => {
+      // if entries have no start time, put them at the end, preserving order
+      // otherwise sort by start time
+      if (a.start === undefined && b.start === undefined) {
+        return 0;
+      } else if (a.start === undefined) {
+        return 1;
+      } else if (b.start === undefined) {
+        return -1;
+      }
+      return a.start - b.start;
+    });
   });
 
   dayStr: string = this._dateService.todayStr();
 
   workStart = toSignal(this._workContextService.getWorkStart$(this.dayStr));
   workEnd = toSignal(this._workContextService.getWorkEnd$(this.dayStr));
-  breakTime = toSignal(this._workContextService.getBreakTime$(this.dayStr));
-  workTime = toSignal(
-    this._workContextService.getTimeWorkedForDayTodaysTasks$(this.dayStr),
-  );
+  workTime = computed(() => {
+    return (this.workEnd() || 0) - (this.workStart() || 0);
+  });
+  breakTime = computed(() => {
+    const sessions = this._sessionService.todaySessions();
+    return sessions
+      .filter((session) => session.tid === breakTaskId)
+      .reduce((acc, session) => acc + session.t, 0);
+  });
+  taskTime = computed(() => {
+    const sessions = this._sessionService.todaySessions();
+    return sessions
+      .filter((session) => session.tid !== breakTaskId)
+      .reduce((acc, session) => acc + session.t, 0);
+  });
+  unaccountedTime = computed(() => {
+    return (this.workTime() || 0) - (this.taskTime() || 0) - (this.breakTime() || 0);
+  });
 
   onStartChanged(entry: TableEntry, ev: string): void {
     const newStartTime = new Date(`${this.dayStr} ${ev}`).getTime();
 
     if (newStartTime && !isNaN(newStartTime)) {
       if (entry.session) {
-        this._store$.dispatch({
-          type: '[TimeTracking] Update Time Session',
-          sessionId: entry.session.id,
-          updates: {
-            s: newStartTime,
-          },
+        this._sessionService.update(entry.session, {
+          s: newStartTime,
         });
       } else if (entry.type === 'start') {
         this._workContextService.updateWorkStartForActiveContext(
@@ -207,13 +228,9 @@ export class DailyWorklogTableComponent {
           return;
         }
 
-        this._store$.dispatch({
-          type: '[TimeTracking] Update Time Session',
-          sessionId: entry.session.id,
-          updates: {
-            s: newStartTime,
-            t: newDuration,
-          },
+        this._sessionService.update(entry.session, {
+          s: newStartTime,
+          t: newDuration,
         });
       } else if (entry.type === 'end') {
         this._workContextService.updateWorkEndForActiveContext(this.dayStr, newEndTime);
@@ -226,17 +243,22 @@ export class DailyWorklogTableComponent {
 
     if (newDurationMs && !isNaN(newDurationMs)) {
       if (entry.session) {
-        this._store$.dispatch({
-          type: '[TimeTracking] Update Time Session',
-          sessionId: entry.session.id,
-          updates: {
-            t: newDurationMs,
-          },
+        this._sessionService.update(entry.session, {
+          t: newDurationMs,
         });
       } else if (entry.type === 'end') {
         const newEndTime = (this.workStart() || 0) + newDurationMs;
         this._workContextService.updateWorkEndForActiveContext(this.dayStr, newEndTime);
       }
     }
+  }
+
+  addBreak(): void {
+    // todo: useful default time, default to 15min for now
+    this._sessionService.addSession(breakTaskId, this.dayStr, undefined, 15 * 60 * 1000);
+  }
+
+  addTask(): void {
+    // TODO: implement
   }
 }
