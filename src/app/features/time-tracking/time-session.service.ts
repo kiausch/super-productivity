@@ -16,7 +16,26 @@ export class TimeSessionService {
     this._store.dispatch({
       type: '[TimeTracking] Update Time Session',
       sessionId: session.id,
-      changes,
+      updates: changes,
+    });
+  }
+
+  addSession(
+    taskId: string,
+    date: string,
+    start: number | undefined,
+    duration: number,
+  ): void {
+    const newSession: TimeSession = {
+      id: crypto.randomUUID(),
+      tid: taskId,
+      d: date,
+      s: start,
+      t: duration,
+    };
+    this._store.dispatch({
+      type: '[TimeTracking] Add time session',
+      timeSession: newSession,
     });
   }
 }
