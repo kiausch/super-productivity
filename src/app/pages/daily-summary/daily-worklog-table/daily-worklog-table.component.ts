@@ -155,6 +155,16 @@ export class DailyWorklogTableComponent {
     });
 
     return ret.sort((a, b) => {
+      // always put start at the top and end at the bottom
+      // note: this should be intrinsic to the data model, but if work start/end or start of a session
+      // are altered manually, this is not guaranteed, so we enforce it here in the sorting function
+      if (a.type === 'start' || b.type === 'end') {
+        return -1;
+      }
+      if (a.type === 'end' || b.type === 'start') {
+        return 1;
+      }
+
       // if entries have no start time, put them at the end, preserving order
       // otherwise sort by start time
       if (a.start === undefined && b.start === undefined) {
