@@ -33,12 +33,13 @@ import { WorkContextService } from '../../../features/work-context/work-context.
 import { toSignal } from '@angular/core/rxjs-interop';
 import { TimeSession } from '../../../features/time-tracking/time-tracking.model';
 import { TimeSessionService } from '../../../features/time-tracking/time-session.service';
-import { Store } from '@ngrx/store';
+import { MatDialog } from '@angular/material/dialog';
+import { DialogAddTaskComponent } from './dialog-add-task.component';
 
 // data container for table entries
-// can be a time session, work start/end, break, unaccounted time, summary
+// can be a time session, work start/end, break, unaccounted time
 interface TableEntry {
-  type: 'start' | 'end' | 'break' | 'task' | 'unaccounted' | 'summary';
+  type: 'start' | 'end' | 'break' | 'task' | 'unaccounted';
   description: string;
   icon?: string | undefined;
   start: number | undefined;
@@ -81,7 +82,7 @@ export class DailyWorklogTableComponent {
   private _dateService = inject(DateService);
   readonly _sessionService = inject(TimeSessionService);
   readonly _workContextService = inject(WorkContextService);
-  private readonly _store$ = inject(Store);
+  private readonly _matDialog = inject(MatDialog);
 
   readonly flatTasks = input<Task[]>([]);
   readonly day = input<string>(this._dateService.todayStr());
@@ -91,24 +92,13 @@ export class DailyWorklogTableComponent {
 
   // table entries derived from work context (start, end, breaks, unaccounted)
   readonly tableEntries = computed(() => {
-    const ret: TableEntry[] = [];
-
-    ret.push({
-      type: 'start',
-      description: 'Work Start',
-      icon: 'login',
-      start: this.workStart(),
-      end: undefined,
-      duration: undefined,
-      task: undefined,
-      session: undefined,
-    });
+    const entries: TableEntry[] = [];
 
     for (const session of this._sessionService.todaySessions()) {
       if (session.tid) {
         const task = this.flatTasks()?.find((t) => t.id === session.tid);
         if (task) {
-          ret.push({
+          entries.push({
             type: 'task',
             description: task.title,
             start: session.s,
@@ -118,7 +108,7 @@ export class DailyWorklogTableComponent {
             session: session,
           });
         } else if (session.tid === breakTaskId) {
-          ret.push({
+          entries.push({
             type: 'break',
             description: 'Break',
             icon: 'coffee',
@@ -132,39 +122,7 @@ export class DailyWorklogTableComponent {
       }
     }
 
-    // unaccounted time
-    ret.push({
-      type: 'unaccounted',
-      description: 'Time not Spent on Tasks or Breaks',
-      start: undefined,
-      end: undefined,
-      duration: this.unaccountedTime(),
-      task: undefined,
-      session: undefined,
-    });
-
-    ret.push({
-      type: 'end',
-      description: 'Work End',
-      icon: 'logout',
-      start: undefined,
-      end: this.workEnd(),
-      duration: this.workTime(),
-      task: undefined,
-      session: undefined,
-    });
-
-    return ret.sort((a, b) => {
-      // always put start at the top and end at the bottom
-      // note: this should be intrinsic to the data model, but if work start/end or start of a session
-      // are altered manually, this is not guaranteed, so we enforce it here in the sorting function
-      if (a.type === 'start' || b.type === 'end') {
-        return -1;
-      }
-      if (a.type === 'end' || b.type === 'start') {
-        return 1;
-      }
-
+    entries.sort((a, b) => {
       // if entries have no start time, put them at the end, preserving order
       // otherwise sort by start time
       if (a.start === undefined && b.start === undefined) {
@@ -176,6 +134,41 @@ export class DailyWorklogTableComponent {
       }
       return a.start - b.start;
     });
+
+    // add work start, unaccounted time and work end entries
+    entries.unshift({
+      type: 'start',
+      description: 'Work Start',
+      icon: 'login',
+      start: this.workStart(),
+      end: undefined,
+      duration: undefined,
+      task: undefined,
+      session: undefined,
+    });
+
+    entries.push({
+      type: 'unaccounted',
+      description: 'Time not Spent on Tasks or Breaks',
+      start: undefined,
+      end: undefined,
+      duration: this.unaccountedTime(),
+      task: undefined,
+      session: undefined,
+    });
+
+    entries.push({
+      type: 'end',
+      description: 'Work End',
+      icon: 'logout',
+      start: undefined,
+      end: this.workEnd(),
+      duration: this.workTime(),
+      task: undefined,
+      session: undefined,
+    });
+
+    return entries;
   });
 
   dayStr: string = this._dateService.todayStr();
@@ -269,7 +262,35 @@ export class DailyWorklogTableComponent {
   }
 
   addTask(): void {
-    // TODO: implement
+    this._matDialog
+      .open(DialogAddTaskComponent)
+      .afterClosed()
+      .subscribe((taskOrTitle) => {
+        if (taskOrTitle) {
+          if (typeof taskOrTitle === 'string') {
+            // User is creating a new task with title from input
+            const taskId = this._taskService.add(taskOrTitle);
+            this._taskService.getByIdOnce$(taskId).subscribe((createdTask: Task) => {
+              this._addTaskSession(createdTask, this.unaccountedTime());
+            });
+          } else {
+            // User selected an existing task
+            this._addTaskSession(taskOrTitle, this.unaccountedTime());
+          }
+        }
+      });
+  }
+
+  private _addTaskSession(task: Task, duration: number): void {
+    if (duration > 0) {
+      this._sessionService.addSession(task.id, this.dayStr, undefined, duration);
+    }
+  }
+
+  toggleTaskDone(task: Task): void {
+    this._taskService.updateEverywhere(task.id, {
+      isDone: !task.isDone,
+    });
   }
 
   deleteEntry(entry: TableEntry): void {
