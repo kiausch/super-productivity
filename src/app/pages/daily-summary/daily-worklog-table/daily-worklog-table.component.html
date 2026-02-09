@@ -15,6 +15,7 @@
       <td
         *matCellDef="let entry"
         mat-cell
+        class="entry-title"
       >
         <div
           [class.isDone]="entry.task?.isDone"
@@ -38,6 +39,7 @@
       <td
         *matCellDef="let entry"
         mat-cell
+        class="entry-time-start"
       >
         @if (entry.type !== 'unaccounted' && entry.type !== 'end') {
           <inline-input
@@ -59,6 +61,7 @@
       <td
         *matCellDef="let entry"
         mat-cell
+        class="entry-time-end"
       >
         @if (
           (entry.type !== 'unaccounted' &&
@@ -75,10 +78,11 @@
       </td>
     </ng-container>
 
-    <ng-container matColumnDef="timeSpentToday">
+    <ng-container matColumnDef="timeDuration">
       <th
         *matHeaderCellDef
         mat-header-cell
+        class="entry-time-duration"
       >
         <!-- {{ T.F.TASK.SUMMARY_TABLE.SPENT_TODAY | translate }} -->
         Duration
@@ -179,6 +183,7 @@
       <td
         *matCellDef="let entry"
         mat-cell
+        class="entry-n-dash"
       >
         <span
           class="dash"
@@ -193,6 +198,7 @@
       <th
         *matHeaderCellDef
         mat-header-cell
+        class="entry-eq"
       ></th>
       <td
         *matCellDef="let entry"
@@ -214,7 +220,7 @@
         'nDash',
         'timeEnd',
         'eq',
-        'timeSpentToday',
+        'timeDuration',
         'actions',
       ]"
       mat-header-row
@@ -228,7 +234,7 @@
           'nDash',
           'timeEnd',
           'eq',
-          'timeSpentToday',
+          'timeDuration',
           'actions',
         ]
       "
