@@ -1,14 +1,14 @@
 import { createSelector, MemoizedSelector } from '@ngrx/store';
-import { selectTimeTrackingState } from './time-tracking.selectors';
-import { TimeSession } from '../time-tracking.model';
+import { timeSessionFeature } from './time-session.reducer';
+import { TimeSession } from '../time-session.model';
 import { selectTodayStr } from '../../../root-store/app-state/app-state.selectors';
 
 /**
  * Select all work sessions
  */
 export const selectAllSessions = createSelector(
-  selectTimeTrackingState,
-  (state) => state.workSession,
+  timeSessionFeature.selectSessions,
+  (sessions) => sessions,
 );
 
 export const selectTodaySessions = createSelector(

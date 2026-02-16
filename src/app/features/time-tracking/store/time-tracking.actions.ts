@@ -1,11 +1,7 @@
 /* eslint-disable @typescript-eslint/naming-convention */
 import { createAction, createActionGroup, props } from '@ngrx/store';
 import { WorkContextType } from '../../work-context/work-context.model';
-import {
-  TimeTrackingState,
-  TTWorkContextData,
-  TimeSession,
-} from '../time-tracking.model';
+import { TimeTrackingState, TTWorkContextData } from '../time-tracking.model';
 import { Task } from '../../tasks/task.model';
 import { PersistentActionMeta } from '../../../op-log/core/persistent-action.interface';
 import { OpType } from '../../../op-log/core/operation.types';
@@ -60,16 +56,6 @@ export const TimeTrackingActions = createActionGroup({
       date: string;
       duration: number;
       isFromTrackingReminder: boolean;
-    }>(),
-    'Add time session': props<{
-      timeSession: TimeSession;
-    }>(),
-    'Update Time Session': props<{
-      sessionId: string;
-      updates: Partial<TimeSession>;
-    }>(),
-    'Delete Time Session': props<{
-      sessionId: string;
     }>(),
     'Update whole State': props<{
       newState: TimeTrackingState;

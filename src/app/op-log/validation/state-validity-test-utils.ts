@@ -42,6 +42,10 @@ import { TIME_TRACKING_FEATURE_KEY } from '../../features/time-tracking/store/ti
 import { appStateFeatureKey } from '../../root-store/app-state/app-state.reducer';
 import { getDbDateStr } from '../../util/get-db-date-str';
 import { initialSectionState } from '../../features/section/store/section.reducer';
+import {
+  TIME_SESSION_FEATURE_KEY,
+  initialTimeSessionState,
+} from '../../features/time-session/store/time-session.reducer';
 
 /**
  * Creates a minimal valid AppDataComplete state.
@@ -103,6 +107,7 @@ export const createValidAppData = (
     issueProvider: issueProviderInitialState,
     metric: initialMetricState,
     timeTracking: initialTimeTrackingState,
+    timeSession: { sessions: [] },
     pluginUserData: [],
     pluginMetadata: [],
     archiveYoung: {
@@ -348,6 +353,7 @@ export const rootStateToAppData = (
     boards: state[BOARDS_FEATURE_NAME],
     timeTracking: state[TIME_TRACKING_FEATURE_KEY],
     section: additionalData.section || initialSectionState,
+    timeSession: state[TIME_SESSION_FEATURE_KEY] || initialTimeSessionState,
     // These are either from additional data or defaults
     simpleCounter: additionalData.simpleCounter || initialSimpleCounterState,
     taskRepeatCfg: additionalData.taskRepeatCfg || initialTaskRepeatCfgState,

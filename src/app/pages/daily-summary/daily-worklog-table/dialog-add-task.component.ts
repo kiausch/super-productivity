@@ -3,24 +3,20 @@ import {
   MatDialogRef,
   MatDialogContent,
   MatDialogActions,
-  MatDialogTitle,
 } from '@angular/material/dialog';
 import { SelectTaskComponent } from '../../../features/tasks/select-task/select-task.component';
 import { Task } from '../../../features/tasks/task.model';
 import { MatButton } from '@angular/material/button';
 import { TranslatePipe } from '@ngx-translate/core';
-import { MatIcon } from '@angular/material/icon';
 
 @Component({
   selector: 'dialog-add-task',
   standalone: true,
   imports: [
-    MatDialogTitle,
     MatDialogContent,
     MatDialogActions,
     SelectTaskComponent,
     MatButton,
-    MatIcon,
     TranslatePipe,
   ],
   template: `

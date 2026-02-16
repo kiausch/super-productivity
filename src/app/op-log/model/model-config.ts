@@ -34,6 +34,9 @@ import {
   TimeTrackingState,
 } from '../../features/time-tracking/time-tracking.model';
 import { initialTimeTrackingState } from '../../features/time-tracking/store/time-tracking.reducer';
+import { TimeSessionState } from '../../features/time-session/time-session.model';
+import { initialTimeSessionState } from '../../features/time-session/store/time-session.reducer';
+import { appDataValidators } from '../validation/validation-fn';
 import { fixEntityStateConsistency } from '../../util/check-fix-entity-state-consistency';
 import {
   initialPluginMetaDataState,
@@ -61,6 +64,7 @@ export type AllModelConfig = {
   taskRepeatCfg: ModelCfg<TaskRepeatCfgState>;
   reminders: ModelCfg<Reminder[]>;
   timeTracking: ModelCfg<TimeTrackingState>;
+  timeSession: ModelCfg<TimeSessionState>;
   pluginUserData: ModelCfg<PluginUserDataState | undefined>;
   pluginMetadata: ModelCfg<PluginMetaDataState | undefined>;
   archiveYoung: ModelCfg<ArchiveModel>;
@@ -78,6 +82,11 @@ export const MODEL_CONFIGS: AllModelConfig = {
   timeTracking: {
     defaultData: initialTimeTrackingState,
     isMainFileModel: true,
+  },
+  timeSession: {
+    defaultData: initialTimeSessionState,
+    isMainFileModel: true,
+    validate: appDataValidators.timeSession,
   },
   project: {
     defaultData: initialProjectState,
