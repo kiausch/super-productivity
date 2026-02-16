@@ -1,7 +1,8 @@
 import { inject, Injectable } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { selectAllSessions, selectTodaySessions } from './store/time-session.selectors';
-import { TimeSession } from './time-tracking.model';
+import { TimeSessionActions } from './store/time-session.actions';
+import { TimeSession } from './time-session.model';
 
 @Injectable({
   providedIn: 'root',
@@ -13,11 +14,12 @@ export class TimeSessionService {
   todaySessions = this._store.selectSignal(selectTodaySessions);
 
   update(session: TimeSession, changes: Partial<TimeSession>): void {
-    this._store.dispatch({
-      type: '[TimeTracking] Update Time Session',
-      sessionId: session.id,
-      updates: changes,
-    });
+    this._store.dispatch(
+      TimeSessionActions.updateTimeSession({
+        sessionId: session.id,
+        updates: changes,
+      }),
+    );
   }
 
   addSession(
@@ -33,16 +35,18 @@ export class TimeSessionService {
       s: start,
       t: duration,
     };
-    this._store.dispatch({
-      type: '[TimeTracking] Add time session',
-      timeSession: newSession,
-    });
+    this._store.dispatch(
+      TimeSessionActions.addTimeSession({
+        timeSession: newSession,
+      }),
+    );
   }
 
   deleteSession(sessionId: string): void {
-    this._store.dispatch({
-      type: '[TimeTracking] Delete Time Session',
-      sessionId,
-    });
+    this._store.dispatch(
+      TimeSessionActions.deleteTimeSession({
+        sessionId,
+      }),
+    );
   }
 }

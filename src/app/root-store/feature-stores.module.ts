@@ -81,8 +81,9 @@ import { ReminderCountdownEffects } from '../features/reminder/store/reminder-co
 import { SyncEffects } from '../imex/sync/sync.effects';
 import { boardsFeature } from '../features/boards/store/boards.reducer';
 import { timeTrackingFeature } from '../features/time-tracking/store/time-tracking.reducer';
+import { timeSessionFeature } from '../features/time-session/store/time-session.reducer';
+import { TimeSessionEffects } from '../features/time-session/store/time-session.effects';
 import { ArchiveOperationHandlerEffects } from '../op-log/apply/archive-operation-handler.effects';
-import { TimeSessionEffects } from '../features/time-tracking/store/time-session.effects';
 import { plannerFeature } from '../features/planner/store/planner.reducer';
 import { PlannerEffects } from '../features/planner/store/planner.effects';
 import { AppStateEffects } from './app-state/app-state.effects';
@@ -161,8 +162,11 @@ import {
     StoreModule.forFeature(boardsFeature),
 
     StoreModule.forFeature(timeTrackingFeature),
-    EffectsModule.forFeature([ArchiveOperationHandlerEffects]),
+
+    StoreModule.forFeature(timeSessionFeature),
     EffectsModule.forFeature([TimeSessionEffects]),
+
+    EffectsModule.forFeature([ArchiveOperationHandlerEffects]),
 
     StoreModule.forFeature(plannerFeature),
     EffectsModule.forFeature([PlannerEffects]),

@@ -2,13 +2,13 @@ import { inject, Injectable } from '@angular/core';
 import { Actions, createEffect, ofType } from '@ngrx/effects';
 import { map, tap } from 'rxjs/operators';
 import { setCurrentTask, unsetCurrentTask } from '../../tasks/store/task.actions';
-import { TimeTrackingActions } from './time-tracking.actions';
+import { TimeSessionActions } from './time-session.actions';
 import { nanoid } from 'nanoid';
 import { formatDateYYYYMMDD } from '../../../util/format-date-yyyy-mm-dd';
 
 /**
  * Tracks in-memory task start timestamps when a task is started and
- * emits a TimeTracking 'Add task session' action when tracking is stopped.
+ * emits a TimeSession 'Add time session' action when tracking is stopped.
  */
 @Injectable()
 export class TimeSessionEffects {
@@ -41,13 +41,13 @@ export class TimeSessionEffects {
       map(() => {
         const taskId = this._lastStartedTaskId;
         if (!taskId) {
-          return { type: '[TimeTracking] Noop' } as any;
+          return { type: '[TimeSession] Noop' } as any;
         }
         const start = this._startMap.get(taskId);
         if (!start) {
           // nothing recorded
           this._lastStartedTaskId = null;
-          return { type: '[TimeTracking] Noop' } as any;
+          return { type: '[TimeSession] Noop' } as any;
         }
         const end = Date.now();
         const duration = Math.max(0, end - start);
@@ -57,7 +57,7 @@ export class TimeSessionEffects {
 
         // only save session if duration is longer than 10 seconds
         if (duration < 10000) {
-          return { type: '[TimeTracking] Noop' } as any;
+          return { type: '[TimeSession] Noop' } as any;
         }
 
         // Create TimeSession entry
@@ -69,7 +69,7 @@ export class TimeSessionEffects {
           t: duration,
         };
 
-        return TimeTrackingActions.addTimeSession({
+        return TimeSessionActions.addTimeSession({
           timeSession,
         });
       }),

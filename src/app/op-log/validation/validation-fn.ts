@@ -7,6 +7,7 @@ import {
   ArchiveModel,
   TimeTrackingState,
 } from '../../features/time-tracking/time-tracking.model';
+import { TimeSessionState } from '../../features/time-session/time-session.model';
 import { ProjectState } from '../../features/project/project.model';
 import { MenuTreeState } from '../../features/menu-tree/store/menu-tree.model';
 import { TaskState } from '../../features/tasks/task.model';
@@ -50,6 +51,7 @@ const _validateIssueProvider = createValidate<IssueProviderState>();
 const _validateMetric = createValidate<MetricState>();
 const _validateGlobalConfig = createValidate<GlobalConfigState>();
 const _validateTimeTracking = createValidate<TimeTrackingState>();
+const _validateTimeSession = createValidate<TimeSessionState>();
 const _validatePluginUserData = createValidate<PluginUserDataState>();
 const _validatePluginMetadata = createValidate<PluginMetaDataState>();
 
@@ -97,6 +99,7 @@ export const appDataValidators: {
   metric: <R>(d: R | MetricState) => _wrapValidate(_validateMetric(d), d, true),
   globalConfig: <R>(d: R | GlobalConfigState) => _wrapValidate(_validateGlobalConfig(d)),
   timeTracking: <R>(d: R | TimeTrackingState) => _wrapValidate(_validateTimeTracking(d)),
+  timeSession: <R>(d: R | TimeSessionState) => _wrapValidate(_validateTimeSession(d)),
   pluginUserData: <R>(d: R | PluginUserDataState) =>
     _wrapValidate(_validatePluginUserData(d)),
   pluginMetadata: <R>(d: R | PluginMetaDataState) =>

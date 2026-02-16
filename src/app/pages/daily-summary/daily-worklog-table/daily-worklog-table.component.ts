@@ -31,8 +31,8 @@ import { TranslatePipe } from '@ngx-translate/core';
 import { MomentFormatPipe } from '../../../ui/pipes/moment-format.pipe';
 import { WorkContextService } from '../../../features/work-context/work-context.service';
 import { toSignal } from '@angular/core/rxjs-interop';
-import { TimeSession } from '../../../features/time-tracking/time-tracking.model';
-import { TimeSessionService } from '../../../features/time-tracking/time-session.service';
+import { TimeSession } from '../../../features/time-session/time-session.model';
+import { TimeSessionService } from '../../../features/time-session/time-session.service';
 import { MatDialog } from '@angular/material/dialog';
 import { DialogAddTaskComponent } from './dialog-add-task.component';
 

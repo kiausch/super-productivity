@@ -2,6 +2,7 @@ import { DEFAULT_GLOBAL_CONFIG } from '../features/config/default-global-config.
 import { createEmptyEntity } from './create-empty-entity';
 import { AppDataComplete } from '../op-log/model/model-config';
 import { initialTimeTrackingState } from '../features/time-tracking/store/time-tracking.reducer';
+import { initialTimeSessionState } from '../features/time-session/store/time-session.reducer';
 
 export const createAppDataCompleteMock = (): AppDataComplete => ({
   project: {
@@ -44,8 +45,8 @@ export const createAppDataCompleteMock = (): AppDataComplete => ({
   timeTracking: {
     project: {},
     tag: {},
-    workSession: [],
   },
+  timeSession: initialTimeSessionState,
 
   archiveYoung: {
     task: createEmptyEntity(),
