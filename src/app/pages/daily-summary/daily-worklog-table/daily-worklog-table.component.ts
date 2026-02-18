@@ -33,6 +33,7 @@ import { WorkContextService } from '../../../features/work-context/work-context.
 import { toSignal } from '@angular/core/rxjs-interop';
 import { TimeSession } from '../../../features/time-session/time-session.model';
 import { TimeSessionService } from '../../../features/time-session/time-session.service';
+import { BREAK_TASK_ID } from '../../../features/time-session/time-session.model';
 import { MatDialog } from '@angular/material/dialog';
 import { DialogAddTaskComponent } from './dialog-add-task.component';
 
@@ -48,9 +49,6 @@ interface TableEntry {
   task: TaskCopy | undefined;
   session: TimeSession | undefined;
 }
-
-// todo: move to const file, maybe make it a const task, so that we can use accumulation functions on it
-const breakTaskId = 'BREAK';
 
 @Component({
   selector: 'daily-worklog-table',
@@ -107,7 +105,7 @@ export class DailyWorklogTableComponent {
             task: task,
             session: session,
           });
-        } else if (session.tid === breakTaskId) {
+        } else if (session.tid === BREAK_TASK_ID) {
           entries.push({
             type: 'break',
             description: 'Break',
@@ -181,13 +179,13 @@ export class DailyWorklogTableComponent {
   breakTime = computed(() => {
     const sessions = this._sessionService.todaySessions();
     return sessions
-      .filter((session) => session.tid === breakTaskId)
+      .filter((session) => session.tid === BREAK_TASK_ID)
       .reduce((acc, session) => acc + session.t, 0);
   });
   taskTime = computed(() => {
     const sessions = this._sessionService.todaySessions();
     return sessions
-      .filter((session) => session.tid !== breakTaskId)
+      .filter((session) => session.tid !== BREAK_TASK_ID)
       .reduce((acc, session) => acc + session.t, 0);
   });
   unaccountedTime = computed(() => {
@@ -258,7 +256,12 @@ export class DailyWorklogTableComponent {
 
   addBreak(): void {
     // todo: useful default time, default to 15min for now
-    this._sessionService.addSession(breakTaskId, this.dayStr, undefined, 15 * 60 * 1000);
+    this._sessionService.addSession(
+      BREAK_TASK_ID,
+      this.dayStr,
+      undefined,
+      15 * 60 * 1000,
+    );
   }
 
   addTask(): void {

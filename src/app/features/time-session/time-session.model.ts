@@ -18,3 +18,5 @@ export interface TimeSession {
 export interface TimeSessionState {
   sessions: TimeSession[];
 }
+
+export const BREAK_TASK_ID = 'BREAK';
