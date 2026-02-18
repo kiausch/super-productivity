@@ -62,6 +62,8 @@ import { DateService } from 'src/app/core/date/date.service';
 import { getTimeSpentForDay } from './get-time-spent-for-day.util';
 import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { updateWorkContextData } from '../time-tracking/store/time-tracking.actions';
+import { TimeSessionService } from '../time-session/time-session.service';
+import { BREAK_TASK_ID } from '../time-session/time-session.model';
 import { TaskArchiveService } from '../archive/task-archive.service';
 import { INBOX_PROJECT } from '../project/project.const';
 import { selectProjectById } from '../project/store/project.selectors';
@@ -82,6 +84,7 @@ export class WorkContextService {
   private _router = inject(Router);
   private _translateService = inject(TranslateService);
   private _timeTrackingService = inject(TimeTrackingService);
+  private _timeSessionService = inject(TimeSessionService);
   private _taskArchiveService = inject(TaskArchiveService);
   private _pendingNavigationUrl: string | null = null;
   private readonly _navigationMeasureName = 'work-view-route';
@@ -631,6 +634,9 @@ export class WorkContextService {
         updates: { b: currentBreakNr + 1, bt: currentBreakTime + valToAdd },
       }),
     );
+
+    // Generate a break time session entry so it appears in the worklog
+    this._timeSessionService.addSession(BREAK_TASK_ID, date, undefined, valToAdd);
   }
 
   async updateBreakNrForActiveContext(

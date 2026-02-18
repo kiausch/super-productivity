@@ -77,6 +77,8 @@ import {
 } from './simple-counter-summary-item/simple-counter-summary-item.component';
 import { MetricService } from '../../features/metric/metric.service';
 import { DailyWorklogTableComponent } from './daily-worklog-table/daily-worklog-table.component';
+import { TimeSessionService } from '../../features/time-session/time-session.service';
+import { BREAK_TASK_ID } from '../../features/time-session/time-session.model';
 
 const MAGIC_YESTERDAY_MARGIN = 4 * 60 * 60 * 1000;
 
@@ -128,6 +130,7 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
   private readonly _metricService = inject(MetricService);
   private readonly _translateService = inject(TranslateService);
   private readonly _translateStore = inject(TranslateStore);
+  private readonly _timeSessionService = inject(TimeSessionService);
 
   T: typeof T = T;
   _onDestroy$ = new Subject<void>();
@@ -260,40 +263,16 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
     }),
   );
 
-  breakTime$: Observable<number | undefined> = this.dayStr$.pipe(
-    switchMap((dayStr) => this.workContextService.getBreakTime$(dayStr)),
+  breakSessions = computed(() =>
+    this._timeSessionService.todaySessions().filter((s) => s.tid === BREAK_TASK_ID),
   );
-  breakNr$: Observable<number | undefined> = this.dayStr$.pipe(
-    switchMap((dayStr) => this.workContextService.getBreakNr$(dayStr)),
-  );
+
+  breakTime = computed(() => this.breakSessions().reduce((acc, s) => acc + s.t, 0));
+
+  breakNr = computed(() => this.breakSessions().length);
 
   isBreakTrackingSupport$: Observable<boolean> = this.configService.idle$.pipe(
     map((cfg) => cfg && cfg.isEnableIdleTimeTracking),
-  );
-
-  presenceTime$: Observable<number | undefined> = combineLatest([
-    this.startToEnd$,
-    this.breakTime$,
-  ]).pipe(
-    map(([startToEnd, breakTime]) => {
-      if (!startToEnd) {
-        return undefined;
-      }
-      const presenceTime_ = startToEnd - (breakTime ?? 0);
-      return presenceTime_ > 0 ? presenceTime_ : 0;
-    }),
-  );
-
-  unaccountedTime$: Observable<number | undefined> = combineLatest([
-    this.presenceTime$,
-    this.timeWorked$,
-  ]).pipe(
-    map(([presenceTime, timeWorked]) => {
-      if (!presenceTime) {
-        return undefined;
-      }
-      return presenceTime - (timeWorked ?? 0);
-    }),
   );
 
   actionsToExecuteBeforeFinishDay: Action[] = [{ type: 'FINISH_DAY' }];
@@ -442,38 +421,6 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
     const endTime = new Date(`${this.dayStr} ${ev}`).getTime();
     if (endTime && !isNaN(endTime)) {
       this.workContextService.updateWorkEndForActiveContext(this.dayStr, endTime);
-    }
-  }
-
-  updateBreakNr(value: string): void {
-    const nr = parseInt(value, 10);
-    if (!isNaN(nr)) {
-      this.workContextService.updateBreakNrForActiveContext(this.dayStr, nr);
-
-      if (nr === 0) {
-        this.workContextService.updateBreakTimeForActiveContext(this.dayStr, 0);
-      }
-    }
-  }
-
-  updateBreakTime(time: number): void {
-    if (!isNaN(time)) {
-      this.workContextService.updateBreakTimeForActiveContext(this.dayStr, time);
-
-      if (time === 0) {
-        this.workContextService.updateBreakNrForActiveContext(this.dayStr, 0);
-      } else {
-        // if break time was set to a non-zero value ensure that nr is > 0
-        this.breakNr$
-          .pipe(first())
-          .toPromise()
-          .then((nr) => {
-            const currentNr = nr || 0;
-            if (currentNr === 0) {
-              this.workContextService.updateBreakNrForActiveContext(this.dayStr, 1);
-            }
-          });
-      }
     }
   }
 
