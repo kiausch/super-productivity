@@ -20,6 +20,7 @@ import { selectTaskFeatureState } from '../../features/tasks/store/task.selector
 import { selectTaskRepeatCfgFeatureState } from '../../features/task-repeat-cfg/store/task-repeat-cfg.selectors';
 import { selectSectionFeatureState } from '../../features/section/store/section.selectors';
 import { selectTimeTrackingState } from '../../features/time-tracking/store/time-tracking.selectors';
+import { selectTimeSessionFeatureState } from '../../features/time-session/store/time-session.selectors';
 import { environment } from '../../../environments/environment';
 import { ArchiveModel } from '../../features/time-tracking/time-tracking.model';
 import { initialTimeTrackingState } from '../../features/time-tracking/store/time-tracking.reducer';
@@ -106,6 +107,7 @@ export class StateSnapshotService {
         this._store.select(selectTaskRepeatCfgFeatureState),
         this._store.select(selectMenuTreeState),
         this._store.select(selectTimeTrackingState),
+        this._store.select(selectTimeSessionFeatureState),
         this._store.select(selectPluginUserDataFeatureState),
         this._store.select(selectPluginMetadataFeatureState),
         this._store.select(selectReminderFeatureState),
@@ -127,6 +129,7 @@ export class StateSnapshotService {
       taskRepeatCfg,
       menuTree,
       timeTracking,
+      timeSession,
       pluginUserData,
       pluginMetadata,
       reminders,
@@ -153,6 +156,7 @@ export class StateSnapshotService {
       taskRepeatCfg,
       menuTree,
       timeTracking,
+      timeSession,
       pluginUserData,
       pluginMetadata,
       reminders,
@@ -181,7 +185,8 @@ export class StateSnapshotService {
       taskRepeatCfg: unknown,
       menuTree: unknown,
       timeTracking: unknown,
-      section: unknown;
+      section: unknown,
+      timeSession: unknown;
     let pluginUserData: unknown, pluginMetadata: unknown, reminders: unknown;
 
     // Subscribe synchronously to get current values
@@ -238,6 +243,10 @@ export class StateSnapshotService {
       .pipe(first())
       .subscribe((v) => (timeTracking = v));
     this._store
+      .select(selectTimeSessionFeatureState)
+      .pipe(first())
+      .subscribe((v) => (timeSession = v));
+    this._store
       .select(selectPluginUserDataFeatureState)
       .pipe(first())
       .subscribe((v) => (pluginUserData = v));
@@ -274,6 +283,7 @@ export class StateSnapshotService {
       taskRepeatCfg,
       menuTree,
       timeTracking,
+      timeSession,
       pluginUserData,
       pluginMetadata,
       reminders,

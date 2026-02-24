@@ -18,6 +18,7 @@ export interface AppStateSnapshot {
   taskRepeatCfg: unknown;
   menuTree: unknown;
   timeTracking: unknown;
+  timeSession: unknown;
   pluginUserData: unknown;
   pluginMetadata: unknown;
   reminders: unknown;

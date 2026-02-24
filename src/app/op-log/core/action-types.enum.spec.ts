@@ -58,6 +58,12 @@ describe('ActionType enum', () => {
       expect(ActionType.PROJECT_UPDATE).toBe('[Project] Update Project');
     });
 
+    it('should have correct TimeSession action types', () => {
+      expect(ActionType.TIME_SESSION_ADD).toBe('[TimeSession] Add time session');
+      expect(ActionType.TIME_SESSION_UPDATE).toBe('[TimeSession] Update Time Session');
+      expect(ActionType.TIME_SESSION_DELETE).toBe('[TimeSession] Delete Time Session');
+    });
+
     it('should handle inconsistent spacing in SimpleCounter', () => {
       // Note: One action has '[Simple Counter]' (with space), others have '[SimpleCounter]'
       expect(ActionType.COUNTER_SET_FOR_DATE).toBe(
