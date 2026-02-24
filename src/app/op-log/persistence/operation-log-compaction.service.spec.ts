@@ -609,6 +609,7 @@ describe('OperationLogCompactionService', () => {
         planner: { days: [] },
         menuTree: { items: [] },
         timeTracking: { entries: {} },
+        timeSession: { sessions: [] },
       } as any;
 
       mockStateSnapshot.getStateSnapshot.and.returnValue(stateWithSingletons);
@@ -620,6 +621,7 @@ describe('OperationLogCompactionService', () => {
       expect(savedCache.snapshotEntityKeys).toContain('PLANNER:PLANNER');
       expect(savedCache.snapshotEntityKeys).toContain('MENU_TREE:MENU_TREE');
       expect(savedCache.snapshotEntityKeys).toContain('TIME_TRACKING:TIME_TRACKING');
+      expect(savedCache.snapshotEntityKeys).toContain('TIME_SESSION:TIME_SESSION');
     });
 
     it('should extract archived task entity keys', async () => {
@@ -684,7 +686,8 @@ describe('OperationLogCompactionService', () => {
           key === 'globalConfig' ||
           key === 'planner' ||
           key === 'menuTree' ||
-          key === 'timeTracking'
+          key === 'timeTracking' ||
+          key === 'timeSession'
         ) {
           completeState[key] = { someData: true }; // Singleton existence check
         } else if (key === 'pluginUserData') {
@@ -722,6 +725,7 @@ describe('OperationLogCompactionService', () => {
         planner: 'PLANNER',
         menuTree: 'MENU_TREE',
         timeTracking: 'TIME_TRACKING',
+        timeSession: 'TIME_SESSION',
         archiveYoung: 'TASK', // Archives map to TASK
         archiveOld: 'TASK', // Archives map to TASK
         pluginUserData: 'PLUGIN_USER_DATA',
