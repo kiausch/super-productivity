@@ -49,6 +49,7 @@ import { plannerFeatureKey } from '../../features/planner/store/planner.reducer'
 import { BOARDS_FEATURE_NAME } from '../../features/boards/store/boards.reducer';
 import { menuTreeFeatureKey } from '../../features/menu-tree/store/menu-tree.reducer';
 import { REMINDER_FEATURE_NAME } from '../../features/reminder/store/reminder.reducer';
+import { TIME_SESSION_FEATURE_KEY } from '../../features/time-session/store/time-session.reducer';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IMPORTS - Selectors
@@ -93,6 +94,7 @@ import {
 } from '../../features/issue/store/issue-provider.selectors';
 import { selectConfigFeatureState } from '../../features/config/store/global-config.reducer';
 import { selectTimeTrackingState } from '../../features/time-tracking/store/time-tracking.selectors';
+import { selectTimeSessionFeatureState } from '../../features/time-session/store/time-session.selectors';
 import { selectPlannerState } from '../../features/planner/store/planner.selectors';
 import { selectBoardsState } from '../../features/boards/store/boards.selectors';
 import { selectMenuTreeState } from '../../features/menu-tree/store/menu-tree.selectors';
@@ -286,6 +288,13 @@ export const ENTITY_CONFIGS = {
     featureName: TIME_TRACKING_FEATURE_KEY,
     payloadKey: 'timeTracking',
     selectState: selectTimeTrackingState,
+  },
+
+  TIME_SESSION: {
+    storagePattern: 'singleton',
+    featureName: TIME_SESSION_FEATURE_KEY,
+    payloadKey: 'timeSession',
+    selectState: selectTimeSessionFeatureState,
   },
 
   MENU_TREE: {

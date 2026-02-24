@@ -23,6 +23,7 @@ describe('entity-registry', () => {
     'SIMPLE_COUNTER',
     'WORK_CONTEXT',
     'TIME_TRACKING',
+    'TIME_SESSION',
     'TASK_REPEAT_CFG',
     'ISSUE_PROVIDER',
     'PLANNER',
@@ -52,6 +53,7 @@ describe('entity-registry', () => {
   const SINGLETON_ENTITIES: EntityType[] = [
     'GLOBAL_CONFIG',
     'TIME_TRACKING',
+    'TIME_SESSION',
     'MENU_TREE',
     'WORK_CONTEXT',
   ];
@@ -427,8 +429,8 @@ describe('entity-registry', () => {
       ];
 
       // Update this count when adding new entity types to EntityType union
-      // Current: 17 regular + 3 special = 20 total
-      expect(ALL_TESTED.length).toBe(20);
+      // Current: 18 regular + 3 special = 21 total
+      expect(ALL_TESTED.length).toBe(21);
 
       // Verify no duplicates
       const uniqueTypes = new Set(ALL_TESTED);

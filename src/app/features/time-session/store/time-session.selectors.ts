@@ -1,11 +1,12 @@
-import { createSelector, MemoizedSelector } from '@ngrx/store';
-import { timeSessionFeature } from './time-session.reducer';
-import { TimeSession } from '../time-session.model';
+import { createFeatureSelector, createSelector, MemoizedSelector } from '@ngrx/store';
+import { TIME_SESSION_FEATURE_KEY, timeSessionFeature } from './time-session.reducer';
+import { TimeSession, TimeSessionState } from '../time-session.model';
 import { selectTodayStr } from '../../../root-store/app-state/app-state.selectors';
 
-/**
- * Select all work sessions
- */
+export const selectTimeSessionFeatureState = createFeatureSelector<TimeSessionState>(
+  TIME_SESSION_FEATURE_KEY,
+);
+
 export const selectAllSessions = createSelector(
   timeSessionFeature.selectSessions,
   (sessions) => sessions,

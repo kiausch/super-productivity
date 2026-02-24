@@ -1,4 +1,8 @@
-import { TimeSessionActions } from './time-session.actions';
+import {
+  addTimeSession,
+  updateTimeSession,
+  deleteTimeSession,
+} from './time-session.actions';
 import { createFeature, createReducer, on } from '@ngrx/store';
 import { TimeSessionState } from '../time-session.model';
 import { loadAllData } from '../../../root-store/meta/load-all-data.action';
@@ -22,19 +26,19 @@ export const timeSessionReducer = createReducer(
     return state;
   }),
 
-  on(TimeSessionActions.addTimeSession, (state, { timeSession }) => ({
+  on(addTimeSession, (state, { timeSession }) => ({
     ...state,
     sessions: [...state.sessions, timeSession],
   })),
 
-  on(TimeSessionActions.updateTimeSession, (state, { sessionId, updates }) => ({
+  on(updateTimeSession, (state, { sessionId, updates }) => ({
     ...state,
     sessions: state.sessions.map((session) =>
       session.id === sessionId ? { ...session, ...updates } : session,
     ),
   })),
 
-  on(TimeSessionActions.deleteTimeSession, (state, { sessionId }) => ({
+  on(deleteTimeSession, (state, { sessionId }) => ({
     ...state,
     sessions: state.sessions.filter((session) => session.id !== sessionId),
   })),

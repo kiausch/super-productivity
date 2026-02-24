@@ -1,7 +1,11 @@
 import { inject, Injectable } from '@angular/core';
 import { Store } from '@ngrx/store';
 import { selectAllSessions, selectTodaySessions } from './store/time-session.selectors';
-import { TimeSessionActions } from './store/time-session.actions';
+import {
+  addTimeSession,
+  updateTimeSession,
+  deleteTimeSession,
+} from './store/time-session.actions';
 import { TimeSession } from './time-session.model';
 
 @Injectable({
@@ -15,7 +19,7 @@ export class TimeSessionService {
 
   update(session: TimeSession, changes: Partial<TimeSession>): void {
     this._store.dispatch(
-      TimeSessionActions.updateTimeSession({
+      updateTimeSession({
         sessionId: session.id,
         updates: changes,
       }),
@@ -36,7 +40,7 @@ export class TimeSessionService {
       t: duration,
     };
     this._store.dispatch(
-      TimeSessionActions.addTimeSession({
+      addTimeSession({
         timeSession: newSession,
       }),
     );
@@ -44,7 +48,7 @@ export class TimeSessionService {
 
   deleteSession(sessionId: string): void {
     this._store.dispatch(
-      TimeSessionActions.deleteTimeSession({
+      deleteTimeSession({
         sessionId,
       }),
     );

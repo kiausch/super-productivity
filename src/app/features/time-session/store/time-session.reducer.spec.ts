@@ -1,5 +1,9 @@
 import { initialTimeSessionState, timeSessionReducer } from './time-session.reducer';
-import { TimeSessionActions } from './time-session.actions';
+import {
+  addTimeSession,
+  updateTimeSession,
+  deleteTimeSession,
+} from './time-session.actions';
 import { loadAllData } from '../../../root-store/meta/load-all-data.action';
 import { AppDataComplete } from '../../../op-log/model/model-config';
 
@@ -35,7 +39,7 @@ describe('TimeSession Reducer', () => {
         s: 1000000000000,
         t: 3600000,
       };
-      const action = TimeSessionActions.addTimeSession({ timeSession });
+      const action = addTimeSession({ timeSession });
       const result = timeSessionReducer(initialTimeSessionState, action);
       expect(result.sessions.length).toBe(1);
       expect(result.sessions[0]).toEqual(timeSession);
@@ -61,7 +65,7 @@ describe('TimeSession Reducer', () => {
       ];
 
       for (const session of sessions) {
-        const action = TimeSessionActions.addTimeSession({ timeSession: session });
+        const action = addTimeSession({ timeSession: session });
         state = timeSessionReducer(state, action);
       }
 
@@ -81,7 +85,7 @@ describe('TimeSession Reducer', () => {
         s: 1000000000000,
         t: 7200000,
       };
-      const action = TimeSessionActions.addTimeSession({ timeSession: newSession });
+      const action = addTimeSession({ timeSession: newSession });
       const result = timeSessionReducer(originalState, action);
 
       // Original should be unchanged
@@ -98,7 +102,7 @@ describe('TimeSession Reducer', () => {
           { id: '1', tid: 'task-1', d: '2023-01-01', s: 1000000000000, t: 3600000 },
         ],
       };
-      const action = TimeSessionActions.updateTimeSession({
+      const action = updateTimeSession({
         sessionId: '1',
         updates: { t: 7200000 },
       });
@@ -115,7 +119,7 @@ describe('TimeSession Reducer', () => {
           { id: '1', tid: 'task-1', d: '2023-01-01', s: 1000000000000, t: 3600000 },
         ],
       };
-      const action = TimeSessionActions.updateTimeSession({
+      const action = updateTimeSession({
         sessionId: '1',
         updates: { tid: 'task-2' },
       });
@@ -137,7 +141,7 @@ describe('TimeSession Reducer', () => {
           { id: '2', tid: 'task-2', d: '2023-01-02', s: 1000000001000, t: 7200000 },
         ],
       };
-      const action = TimeSessionActions.updateTimeSession({
+      const action = updateTimeSession({
         sessionId: '1',
         updates: { t: 9999999 },
       });
@@ -153,7 +157,7 @@ describe('TimeSession Reducer', () => {
           { id: '1', tid: 'task-1', d: '2023-01-01', s: 1000000000000, t: 3600000 },
         ],
       };
-      const action = TimeSessionActions.updateTimeSession({
+      const action = updateTimeSession({
         sessionId: '1',
         updates: { t: 7200000 },
       });
@@ -171,7 +175,7 @@ describe('TimeSession Reducer', () => {
           { id: '1', tid: 'task-1', d: '2023-01-01', s: 1000000000000, t: 3600000 },
         ],
       };
-      const action = TimeSessionActions.deleteTimeSession({ sessionId: '1' });
+      const action = deleteTimeSession({ sessionId: '1' });
       const result = timeSessionReducer(initialState, action);
 
       expect(result.sessions.length).toBe(0);
@@ -184,7 +188,7 @@ describe('TimeSession Reducer', () => {
           { id: '2', tid: 'task-2', d: '2023-01-02', s: 1000000001000, t: 7200000 },
         ],
       };
-      const action = TimeSessionActions.deleteTimeSession({ sessionId: '2' });
+      const action = deleteTimeSession({ sessionId: '2' });
       const result = timeSessionReducer(initialState, action);
 
       expect(result.sessions.length).toBe(1);
@@ -197,7 +201,7 @@ describe('TimeSession Reducer', () => {
           { id: '1', tid: 'task-1', d: '2023-01-01', s: 1000000000000, t: 3600000 },
         ],
       };
-      const action = TimeSessionActions.deleteTimeSession({ sessionId: 'non-existent' });
+      const action = deleteTimeSession({ sessionId: 'non-existent' });
       const result = timeSessionReducer(initialState, action);
 
       expect(result.sessions.length).toBe(1);
@@ -211,7 +215,7 @@ describe('TimeSession Reducer', () => {
           { id: '2', tid: 'task-2', d: '2023-01-02', s: 1000000001000, t: 7200000 },
         ],
       };
-      const action = TimeSessionActions.deleteTimeSession({ sessionId: '1' });
+      const action = deleteTimeSession({ sessionId: '1' });
       const result = timeSessionReducer(originalState, action);
 
       expect(originalState.sessions.length).toBe(2);

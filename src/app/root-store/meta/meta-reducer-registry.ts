@@ -15,6 +15,7 @@ import { taskRepeatCfgSharedMetaReducer } from './task-shared-meta-reducers/task
 import { plannerSharedMetaReducer } from './task-shared-meta-reducers/planner-shared.reducer';
 import { shortSyntaxSharedMetaReducer } from './task-shared-meta-reducers/short-syntax-shared.reducer';
 import { lwwUpdateMetaReducer } from './task-shared-meta-reducers/lww-update.meta-reducer';
+import { timeSessionSharedMetaReducer } from './task-shared-meta-reducers/time-session-shared.reducer';
 import { actionLoggerReducer } from './action-logger.reducer';
 
 /**
@@ -104,6 +105,7 @@ export const META_REDUCERS: MetaReducer[] = [
   tagSharedMetaReducer, // Tag deletion → cleanup tasks, repeat-cfgs, time-tracking
   issueProviderSharedMetaReducer, // Issue provider unlinking
   taskRepeatCfgSharedMetaReducer, // Repeat config unlinking
+  timeSessionSharedMetaReducer, // Task deletion → cleanup time sessions
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PHASE 6: PLANNER SYNCHRONIZATION (Must run AFTER scheduling)
