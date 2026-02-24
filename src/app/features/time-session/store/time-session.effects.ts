@@ -2,7 +2,7 @@ import { inject, Injectable } from '@angular/core';
 import { Actions, createEffect, ofType } from '@ngrx/effects';
 import { map, tap } from 'rxjs/operators';
 import { setCurrentTask, unsetCurrentTask } from '../../tasks/store/task.actions';
-import { TimeSessionActions } from './time-session.actions';
+import { addTimeSession } from './time-session.actions';
 import { nanoid } from 'nanoid';
 import { formatDateYYYYMMDD } from '../../../util/format-date-yyyy-mm-dd';
 
@@ -69,7 +69,7 @@ export class TimeSessionEffects {
           t: duration,
         };
 
-        return TimeSessionActions.addTimeSession({
+        return addTimeSession({
           timeSession,
         });
       }),

@@ -93,6 +93,7 @@ import {
   adapter as sectionAdapter,
   selectEntities as selectSectionEntitiesFromAdapter,
 } from '../../features/section/store/section.reducer';
+import { TIME_SESSION_FEATURE_KEY } from '../../features/time-session/store/time-session.reducer';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IMPORTS - Selectors
@@ -137,6 +138,7 @@ import {
 } from '../../features/issue/store/issue-provider.selectors';
 import { selectConfigFeatureState } from '../../features/config/store/global-config.reducer';
 import { selectTimeTrackingState } from '../../features/time-tracking/store/time-tracking.selectors';
+import { selectTimeSessionFeatureState } from '../../features/time-session/store/time-session.selectors';
 import { selectPlannerState } from '../../features/planner/store/planner.selectors';
 import { selectBoardsState } from '../../features/boards/store/boards.selectors';
 import { selectMenuTreeState } from '../../features/menu-tree/store/menu-tree.selectors';
@@ -280,6 +282,13 @@ export const buildEntityRegistry = (): EntityRegistry<EntityType> =>
       featureName: TIME_TRACKING_FEATURE_KEY,
       payloadKey: 'timeTracking',
       selectState: selectTimeTrackingState,
+    },
+
+    TIME_SESSION: {
+      storagePattern: 'singleton',
+      featureName: TIME_SESSION_FEATURE_KEY,
+      payloadKey: 'timeSession',
+      selectState: selectTimeSessionFeatureState,
     },
 
     MENU_TREE: {

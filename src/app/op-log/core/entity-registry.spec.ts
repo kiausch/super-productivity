@@ -22,6 +22,7 @@ describe('entity-registry', () => {
     'SIMPLE_COUNTER',
     'WORK_CONTEXT',
     'TIME_TRACKING',
+    'TIME_SESSION',
     'TASK_REPEAT_CFG',
     'ISSUE_PROVIDER',
     'PLANNER',
@@ -53,6 +54,7 @@ describe('entity-registry', () => {
   const SINGLETON_ENTITIES: EntityType[] = [
     'GLOBAL_CONFIG',
     'TIME_TRACKING',
+    'TIME_SESSION',
     'MENU_TREE',
     'WORK_CONTEXT',
   ];
