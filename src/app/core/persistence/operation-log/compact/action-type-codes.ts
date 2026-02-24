@@ -16,6 +16,7 @@ import { ActionType } from '../../../../op-log/core/action-types.enum';
  * - S = SimpleCounter
  * - R = TaskRepeatCfg
  * - K = TimeTracking
+ * - J = TimeSession
  * - A = Archive
  * - L = Planner
  * - C = GlobalConfig
@@ -103,6 +104,11 @@ export const ACTION_TYPE_TO_CODE: Record<ActionType, string> = {
   [ActionType.TIME_TRACKING_SYNC_SESSIONS]: 'KS',
   [ActionType.TIME_TRACKING_SYNC_TIME_SPENT]: 'KT',
   [ActionType.TIME_TRACKING_UPDATE_CONTEXT_DATA]: 'KW',
+
+  // TimeSession actions (J)
+  [ActionType.TIME_SESSION_ADD]: 'JA',
+  [ActionType.TIME_SESSION_UPDATE]: 'JU',
+  [ActionType.TIME_SESSION_DELETE]: 'JD',
 
   // Planner actions (L)
   [ActionType.PLANNER_UPSERT_DAY]: 'LU',

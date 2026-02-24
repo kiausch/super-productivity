@@ -87,6 +87,9 @@ export const extractEntityKeysFromState = (state: AppStateSnapshot): string[] =>
   if (state.timeTracking) {
     keys.push('TIME_TRACKING:TIME_TRACKING');
   }
+  if (state.timeSession) {
+    keys.push('TIME_SESSION:TIME_SESSION');
+  }
 
   // Archive entities (nested task states)
   // These share the TASK entity type since archived tasks are still tasks

@@ -12,8 +12,8 @@ describe('ActionType enum', () => {
   const enumValues = Object.values(ActionType) as string[];
   const mappingKeys = Object.keys(ACTION_TYPE_TO_CODE);
 
-  it('should have exactly 135 members', () => {
-    expect(enumValues.length).toBe(135);
+  it('should have exactly 138 members', () => {
+    expect(enumValues.length).toBe(138);
   });
 
   it('should have 1:1 correspondence with ACTION_TYPE_TO_CODE', () => {
@@ -53,6 +53,12 @@ describe('ActionType enum', () => {
     it('should have correct Project action types', () => {
       expect(ActionType.PROJECT_ADD).toBe('[Project] Add Project');
       expect(ActionType.PROJECT_UPDATE).toBe('[Project] Update Project');
+    });
+
+    it('should have correct TimeSession action types', () => {
+      expect(ActionType.TIME_SESSION_ADD).toBe('[TimeSession] Add time session');
+      expect(ActionType.TIME_SESSION_UPDATE).toBe('[TimeSession] Update Time Session');
+      expect(ActionType.TIME_SESSION_DELETE).toBe('[TimeSession] Delete Time Session');
     });
 
     it('should handle inconsistent spacing in SimpleCounter', () => {

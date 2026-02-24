@@ -83,6 +83,11 @@ export enum ActionType {
   TIME_TRACKING_SYNC_TIME_SPENT = '[TimeTracking] Sync time spent',
   TIME_TRACKING_UPDATE_CONTEXT_DATA = '[TimeTracking] Update Work Context Data',
 
+  // TimeSession actions (J)
+  TIME_SESSION_ADD = '[TimeSession] Add time session',
+  TIME_SESSION_UPDATE = '[TimeSession] Update Time Session',
+  TIME_SESSION_DELETE = '[TimeSession] Delete Time Session',
+
   // Planner actions (L)
   PLANNER_UPSERT_DAY = '[Planner] Upsert Planner Day',
   PLANNER_TRANSFER_TASK = '[Planner] Transfer Task',
