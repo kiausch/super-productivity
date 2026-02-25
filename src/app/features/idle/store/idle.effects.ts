@@ -4,7 +4,6 @@ import { LOCAL_ACTIONS } from '../../../util/local-actions.token';
 import { skipWhileApplyingRemoteOps } from '../../../util/skip-during-sync.operator';
 import { DataInitStateService } from '../../../core/data-init/data-init-state.service';
 import { ChromeExtensionInterfaceService } from '../../../core/chrome-extension-interface/chrome-extension-interface.service';
-import { WorkContextService } from '../../work-context/work-context.service';
 import { TaskService } from '../../tasks/task.service';
 import { MatDialog } from '@angular/material/dialog';
 import { Store } from '@ngrx/store';
@@ -56,6 +55,7 @@ import {
   unPauseFocusSession,
 } from '../../focus-mode/store/focus-mode.actions';
 import { Log } from '../../../core/log';
+import { TimeSessionService } from '../../time-session/time-session.service';
 
 const DEFAULT_MIN_IDLE_TIME = 60000;
 const IDLE_POLL_INTERVAL = 1000;
@@ -64,7 +64,7 @@ const IDLE_POLL_INTERVAL = 1000;
 export class IdleEffects {
   private actions$ = inject(LOCAL_ACTIONS);
   private _chromeExtensionInterfaceService = inject(ChromeExtensionInterfaceService);
-  private _workContextService = inject(WorkContextService);
+  private _timeSessionService = inject(TimeSessionService);
   private _taskService = inject(TaskService);
   private _simpleCounterService = inject(SimpleCounterService);
   private _matDialog = inject(MatDialog);
@@ -317,10 +317,7 @@ export class IdleEffects {
           // NOTE: break timer reset is handled in takeABrea
           if (breakItems.length) {
             breakItems.forEach((item) => {
-              this._workContextService.addToBreakTimeForActiveContext(
-                undefined,
-                item.time,
-              );
+              this._timeSessionService.addBreakSession(item.time);
             });
             if (wasFocusSessionRunning) {
               this._store.dispatch(completeFocusSession({ isManual: false }));

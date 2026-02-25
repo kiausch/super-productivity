@@ -245,23 +245,8 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
     ),
   );
 
-  started$: Observable<number | undefined> = this.dayStr$.pipe(
-    switchMap((dayStr) => this.workContextService.getWorkStart$(dayStr)),
-  );
-  end$: Observable<number | undefined> = this.dayStr$.pipe(
-    switchMap((dayStr) => this.workContextService.getWorkEnd$(dayStr)),
-  );
-  startToEnd$: Observable<number | undefined> = combineLatest([
-    this.started$,
-    this.end$,
-  ]).pipe(
-    map(([start, end]) => {
-      if (!start || !end) {
-        return undefined;
-      }
-      return end - start;
-    }),
-  );
+  started = this._timeSessionService.getWorkStart(this.dayStr);
+  end = this._timeSessionService.getWorkEnd(this.dayStr);
 
   breakSessions = computed(() =>
     this._timeSessionService.todaySessions().filter((s) => s.tid === BREAK_TASK_ID),
@@ -413,14 +398,14 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
   updateWorkStart(ev: string): void {
     const startTime = new Date(`${this.dayStr} ${ev}`).getTime();
     if (startTime && !isNaN(startTime)) {
-      this.workContextService.updateWorkStartForActiveContext(this.dayStr, startTime);
+      this._timeSessionService.setWorkStart(this.dayStr, startTime);
     }
   }
 
   updateWorkEnd(ev: string): void {
     const endTime = new Date(`${this.dayStr} ${ev}`).getTime();
     if (endTime && !isNaN(endTime)) {
-      this.workContextService.updateWorkEndForActiveContext(this.dayStr, endTime);
+      this._timeSessionService.setWorkEnd(this.dayStr, endTime);
     }
   }
 

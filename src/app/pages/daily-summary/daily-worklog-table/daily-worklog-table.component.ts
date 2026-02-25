@@ -8,7 +8,6 @@ import {
 } from '@angular/core';
 import { Task, TaskCopy } from '../../../features/tasks/task.model';
 import { TaskService } from '../../../features/tasks/task.service';
-import { ProjectService } from '../../../features/project/project.service';
 import { T } from '../../../t.const';
 import { DateService } from '../../../core/date/date.service';
 import {
@@ -30,10 +29,13 @@ import { MsToClockStringPipe } from '../../../ui/duration/ms-to-clock-string.pip
 import { TranslatePipe } from '@ngx-translate/core';
 import { MomentFormatPipe } from '../../../ui/pipes/moment-format.pipe';
 import { WorkContextService } from '../../../features/work-context/work-context.service';
-import { toSignal } from '@angular/core/rxjs-interop';
 import { TimeSession } from '../../../features/time-session/time-session.model';
 import { TimeSessionService } from '../../../features/time-session/time-session.service';
-import { BREAK_TASK_ID } from '../../../features/time-session/time-session.model';
+import {
+  BREAK_TASK_ID,
+  WORK_START_ID,
+  WORK_END_ID,
+} from '../../../features/time-session/time-session.model';
 import { MatDialog } from '@angular/material/dialog';
 import { DialogAddTaskComponent } from './dialog-add-task.component';
 
@@ -76,9 +78,8 @@ interface TableEntry {
 })
 export class DailyWorklogTableComponent {
   private _taskService = inject(TaskService);
-  private _projectService = inject(ProjectService);
   private _dateService = inject(DateService);
-  readonly _sessionService = inject(TimeSessionService);
+  readonly _timeSessionService = inject(TimeSessionService);
   readonly _workContextService = inject(WorkContextService);
   private readonly _matDialog = inject(MatDialog);
 
@@ -92,8 +93,13 @@ export class DailyWorklogTableComponent {
   readonly tableEntries = computed(() => {
     const entries: TableEntry[] = [];
 
-    for (const session of this._sessionService.todaySessions()) {
+    for (const session of this._timeSessionService.todaySessions()) {
       if (session.tid) {
+        // Skip special work hour marker sessions - they're displayed separately
+        if (session.tid === WORK_START_ID || session.tid === WORK_END_ID) {
+          continue;
+        }
+
         const task = this.flatTasks()?.find((t) => t.id === session.tid);
         if (task) {
           entries.push({
@@ -171,25 +177,25 @@ export class DailyWorklogTableComponent {
 
   dayStr: string = this._dateService.todayStr();
 
-  workStart = toSignal(this._workContextService.getWorkStart$(this.dayStr));
-  workEnd = toSignal(this._workContextService.getWorkEnd$(this.dayStr));
+  workStart = this._timeSessionService.getWorkStart(this.dayStr);
+  workEnd = this._timeSessionService.getWorkEnd(this.dayStr);
   workTime = computed(() => {
     return (this.workEnd() || 0) - (this.workStart() || 0);
   });
   breakTime = computed(() => {
-    const sessions = this._sessionService.todaySessions();
+    const sessions = this._timeSessionService.todaySessions();
     return sessions
       .filter((session) => session.tid === BREAK_TASK_ID)
       .reduce((acc, session) => acc + session.t, 0);
   });
   taskTime = computed(() => {
-    const sessions = this._sessionService.todaySessions();
+    const sessions = this._timeSessionService.todaySessions();
     return sessions
-      .filter((session) => session.tid !== BREAK_TASK_ID)
+      .filter((session) => session.tid && session.tid !== BREAK_TASK_ID)
       .reduce((acc, session) => acc + session.t, 0);
   });
   unaccountedTime = computed(() => {
-    return (this.workTime() || 0) - (this.taskTime() || 0) - (this.breakTime() || 0);
+    return this.workTime() - this.taskTime() - this.breakTime();
   });
 
   onStartChanged(entry: TableEntry, ev: string): void {
@@ -197,14 +203,11 @@ export class DailyWorklogTableComponent {
 
     if (newStartTime && !isNaN(newStartTime)) {
       if (entry.session) {
-        this._sessionService.update(entry.session, {
+        this._timeSessionService.update(entry.session, {
           s: newStartTime,
         });
       } else if (entry.type === 'start') {
-        this._workContextService.updateWorkStartForActiveContext(
-          this.dayStr,
-          newStartTime,
-        );
+        this._timeSessionService.setWorkStart(this.dayStr, newStartTime);
       }
     }
   }
@@ -229,12 +232,12 @@ export class DailyWorklogTableComponent {
           return;
         }
 
-        this._sessionService.update(entry.session, {
+        this._timeSessionService.update(entry.session, {
           s: newStartTime,
           t: newDuration,
         });
       } else if (entry.type === 'end') {
-        this._workContextService.updateWorkEndForActiveContext(this.dayStr, newEndTime);
+        this._timeSessionService.setWorkEnd(this.dayStr, newEndTime);
       }
     }
   }
@@ -244,24 +247,19 @@ export class DailyWorklogTableComponent {
 
     if (newDurationMs && !isNaN(newDurationMs)) {
       if (entry.session) {
-        this._sessionService.update(entry.session, {
+        this._timeSessionService.update(entry.session, {
           t: newDurationMs,
         });
       } else if (entry.type === 'end') {
         const newEndTime = (this.workStart() || 0) + newDurationMs;
-        this._workContextService.updateWorkEndForActiveContext(this.dayStr, newEndTime);
+        this._timeSessionService.setWorkEnd(this.dayStr, newEndTime);
       }
     }
   }
 
   addBreak(): void {
     // todo: useful default time, default to 15min for now
-    this._sessionService.addSession(
-      BREAK_TASK_ID,
-      this.dayStr,
-      undefined,
-      15 * 60 * 1000,
-    );
+    this._timeSessionService.addBreakSession(15 * 60 * 1000, this.dayStr, undefined);
   }
 
   addTask(): void {
@@ -286,7 +284,7 @@ export class DailyWorklogTableComponent {
 
   private _addTaskSession(task: Task, duration: number): void {
     if (duration > 0) {
-      this._sessionService.addSession(task.id, this.dayStr, undefined, duration);
+      this._timeSessionService.addSession(task.id, this.dayStr, undefined, duration);
     }
   }
 
@@ -298,7 +296,7 @@ export class DailyWorklogTableComponent {
 
   deleteEntry(entry: TableEntry): void {
     if (entry.session) {
-      this._sessionService.deleteSession(entry.session.id);
+      this._timeSessionService.deleteSession(entry.session.id);
     }
   }
 }

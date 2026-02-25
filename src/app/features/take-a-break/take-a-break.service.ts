@@ -26,12 +26,12 @@ import { GlobalConfigState, TakeABreakConfig } from '../config/global-config.mod
 import { T } from '../../t.const';
 import { NotifyService } from '../../core/notify/notify.service';
 import { UiHelperService } from '../ui-helper/ui-helper.service';
-import { WorkContextService } from '../work-context/work-context.service';
 import { Tick } from '../../core/global-tracking-interval/tick.model';
 import { ofType } from '@ngrx/effects';
 import { idleDialogResult, triggerResetBreakTimer } from '../idle/store/idle.actions';
 import { playSound } from '../../util/play-sound';
 import { LOCAL_ACTIONS } from '../../util/local-actions.token';
+import { TimeSessionService } from '../time-session/time-session.service';
 
 const BREAK_TRIGGER_DURATION = 10 * 60 * 1000;
 const PING_UPDATE_BANNER_INTERVAL = 60 * 1000;
@@ -57,7 +57,7 @@ export class TakeABreakService {
   private _idleService = inject(IdleService);
   private _actions$ = inject(LOCAL_ACTIONS);
   private _configService = inject(GlobalConfigService);
-  private _workContextService = inject(WorkContextService);
+  private _timeSessionService = inject(TimeSessionService);
   private _notifyService = inject(NotifyService);
   private _bannerService = inject(BannerService);
   private _chromeExtensionInterfaceService = inject(ChromeExtensionInterfaceService);
@@ -326,7 +326,7 @@ export class TakeABreakService {
 
   resetTimerAndCountAsBreak(): void {
     const min5 = 1000 * 60 * 5;
-    this._workContextService.addToBreakTimeForActiveContext(undefined, min5);
+    this._timeSessionService.addBreakSession(min5);
     this.resetTimer();
 
     this._triggerLockScreenCounter$.next(false);

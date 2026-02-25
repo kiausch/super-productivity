@@ -20,14 +20,14 @@
           <inline-input
             (changed)="updateWorkStart($event)"
             [type]="'time'"
-            [value]="started$ | async | momentFormat: 'HH:mm'"
+            [value]="started() | momentFormat: 'HH:mm'"
           >
           </inline-input>
           –
           <inline-input
             (changed)="updateWorkEnd($event)"
             [type]="'time'"
-            [value]="end$ | async | momentFormat: 'HH:mm'"
+            [value]="end() | momentFormat: 'HH:mm'"
           >
           </inline-input>
         </div>
