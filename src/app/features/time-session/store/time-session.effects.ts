@@ -4,7 +4,7 @@ import { map, tap } from 'rxjs/operators';
 import { setCurrentTask, unsetCurrentTask } from '../../tasks/store/task.actions';
 import { addTimeSession } from './time-session.actions';
 import { nanoid } from 'nanoid';
-import { formatDateYYYYMMDD } from '../../../util/format-date-yyyy-mm-dd';
+import { getDbDateStr } from '../../../util/get-db-date-str';
 
 /**
  * Tracks in-memory task start timestamps when a task is started and
@@ -64,7 +64,7 @@ export class TimeSessionEffects {
         const timeSession = {
           id: nanoid(),
           tid: taskId,
-          d: formatDateYYYYMMDD(start),
+          d: getDbDateStr(start),
           s: start,
           t: duration,
         };
