@@ -7,7 +7,6 @@ import { Store } from '@ngrx/store';
 import { selectTimeTrackingState } from './store/time-tracking.selectors';
 import { ArchiveDbAdapter } from '../../core/persistence/archive-db-adapter.service';
 import { WorkContextType, WorkStartEnd } from '../work-context/work-context.model';
-import { ImpossibleError } from '../../op-log/sync-exports';
 import { toLegacyWorkStartEndMaps } from './to-legacy-work-start-end-maps';
 import { TimeTrackingActions } from './store/time-tracking.actions';
 import { Log } from '../../core/log';
@@ -58,15 +57,66 @@ export class TimeTrackingService {
     type: WorkContextType;
   }): Observable<TTDateMap<TTWorkContextData>> {
     const { id, type } = ctx;
-    return this.state$.pipe(
-      map((state) => {
-        if (type === 'PROJECT') {
-          return state.project[id] || ({} as TTDateMap<TTWorkContextData>);
+    return combineLatest([
+      this.state$,
+      this._store.select((state: any) => state.timeSession?.sessions || []),
+    ]).pipe(
+      map(([timeTrackingState, allSessions]) => {
+        // Get old storage data for this context
+        const oldStorageMap: TTDateMap<TTWorkContextData> =
+          type === 'PROJECT'
+            ? timeTrackingState.project[id] || {}
+            : type === 'TAG'
+              ? timeTrackingState.tag[id] || {}
+              : ({} as TTDateMap<TTWorkContextData>);
+
+        // Get all unique dates from old storage and sessions
+        const allDates = new Set([
+          ...Object.keys(oldStorageMap),
+          ...allSessions.map((s: any) => s.d),
+        ]);
+
+        // Build result map with fallback for each date
+        const result: TTDateMap<TTWorkContextData> = {};
+        for (const date of allDates) {
+          const oldData = oldStorageMap[date] || {};
+
+          // Calculate work start/end from all sessions (includes manual markers)
+          const sessionsForDate = allSessions.filter(
+            (s: any) => s.d === date && s.s !== undefined,
+          );
+
+          const calculatedStart =
+            sessionsForDate.length > 0
+              ? Math.min(...sessionsForDate.map((s: any) => s.s))
+              : undefined;
+
+          const calculatedEnd =
+            sessionsForDate.length > 0
+              ? Math.max(...sessionsForDate.map((s: any) => s.s + s.t))
+              : undefined;
+
+          // Use calculated values, fall back to old storage
+          const workStart = calculatedStart ?? oldData.s;
+          const workEnd = calculatedEnd ?? oldData.e;
+
+          // Only add entry if there's any data for this date
+          if (
+            workStart !== undefined ||
+            workEnd !== undefined ||
+            oldData.b !== undefined ||
+            oldData.bt !== undefined
+          ) {
+            result[date] = {
+              ...(workStart !== undefined && { s: workStart }),
+              ...(workEnd !== undefined && { e: workEnd }),
+              ...(oldData.b !== undefined && { b: oldData.b }),
+              ...(oldData.bt !== undefined && { bt: oldData.bt }),
+            };
+          }
         }
-        if (type === 'TAG') {
-          return state.tag[id] || ({} as TTDateMap<TTWorkContextData>);
-        }
-        throw new ImpossibleError('Invalid work context type ' + type);
+
+        return result;
       }),
     );
   }

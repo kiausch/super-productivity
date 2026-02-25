@@ -20,3 +20,17 @@ export interface TimeSessionState {
 }
 
 export const BREAK_TASK_ID = 'BREAK';
+
+/**
+ * Special task ID for work start marker sessions.
+ * These sessions have t: 0 and s: timestamp indicating when work started.
+ * Used for manual work start entries in daily summary.
+ */
+export const WORK_START_ID = 'WORK_START';
+
+/**
+ * Special task ID for work end marker sessions.
+ * These sessions have t: 0 and s: timestamp indicating when work ended.
+ * Used for manual work end entries in daily summary.
+ */
+export const WORK_END_ID = 'WORK_END';
