@@ -151,15 +151,17 @@ export class DailyWorklogTableComponent {
       session: undefined,
     });
 
-    entries.push({
-      type: 'unaccounted',
-      description: 'Time not Spent on Tasks or Breaks',
-      start: undefined,
-      end: undefined,
-      duration: this.unaccountedTime(),
-      task: undefined,
-      session: undefined,
-    });
+    if (this.unaccountedTime() > 0) {
+      entries.push({
+        type: 'unaccounted',
+        description: 'Time not Spent on Tasks or Breaks',
+        start: undefined,
+        end: undefined,
+        duration: this.unaccountedTime(),
+        task: undefined,
+        session: undefined,
+      });
+    }
 
     entries.push({
       type: 'end',
