@@ -199,15 +199,23 @@ export class DailyWorklogTableComponent {
   });
 
   onStartChanged(entry: TableEntry, ev: string): void {
-    const newStartTime = new Date(`${this.dayStr} ${ev}`).getTime();
-
-    if (newStartTime && !isNaN(newStartTime)) {
+    if (ev === '') {
+      // if input is cleared, delete start time
       if (entry.session) {
         this._timeSessionService.update(entry.session, {
-          s: newStartTime,
+          s: undefined,
         });
-      } else if (entry.type === 'start') {
-        this._timeSessionService.setWorkStart(this.dayStr, newStartTime);
+      }
+    } else {
+      const newStartTime = new Date(`${this.dayStr} ${ev}`).getTime();
+      if (newStartTime && !isNaN(newStartTime)) {
+        if (entry.session) {
+          this._timeSessionService.update(entry.session, {
+            s: newStartTime,
+          });
+        } else if (entry.type === 'start') {
+          this._timeSessionService.setWorkStart(this.dayStr, newStartTime);
+        }
       }
     }
   }
