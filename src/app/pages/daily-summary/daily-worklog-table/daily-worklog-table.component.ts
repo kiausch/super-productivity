@@ -294,7 +294,7 @@ export class DailyWorklogTableComponent {
 
   private _addTaskSession(task: Task, duration: number): void {
     if (duration > 0) {
-      this._timeSessionService.addSession(task.id, this.dayStr, undefined, duration);
+      this._timeSessionService.addSession(task.id, this.dayStr, duration);
     }
   }
 

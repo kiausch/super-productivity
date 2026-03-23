@@ -17,6 +17,7 @@ import {
 } from '@angular/material/dialog';
 import { Task, TaskCopy, TimeSpentOnDayCopy } from '../task.model';
 import { TaskService } from '../task.service';
+import { TimeSessionService } from '../../time-session/time-session.service';
 import { getTodayStr } from '../util/get-today-str';
 import { createTaskCopy } from '../util/create-task-copy';
 import {
@@ -67,6 +68,7 @@ export class DialogTimeEstimateComponent implements AfterViewInit {
   private _matDialogRef = inject<MatDialogRef<DialogTimeEstimateComponent>>(MatDialogRef);
   private _matDialog = inject(MatDialog);
   private _taskService = inject(TaskService);
+  private _timeSessionService = inject(TimeSessionService);
   private _cd = inject(ChangeDetectorRef);
   private _el = inject(ElementRef);
   data = inject(MAT_DIALOG_DATA);
@@ -94,10 +96,29 @@ export class DialogTimeEstimateComponent implements AfterViewInit {
   }
 
   submit(): void {
+    // Only update timeEstimate via the task; timeSpentOnDay is owned by sessions
     this._taskService.update(this.taskCopy.id, {
       timeEstimate: this.taskCopy.timeEstimate,
-      timeSpentOnDay: this.timeSpentOnDayCopy,
     });
+
+    // Apply per-date diffs as session actions
+    // TODO: rework the dialog to directly edit sessions instead of doing
+    // this diffing dance - would be more intuitive and less error-prone.
+    // This is a bit hacky but it works for now.
+    const original = this.task.timeSpentOnDay ?? {};
+    const edited = this.timeSpentOnDayCopy;
+    const allDates = new Set([...Object.keys(original), ...Object.keys(edited)]);
+    for (const date of allDates) {
+      const oldMs = original[date] ?? 0;
+      const newMs = edited[date] ?? 0;
+      const delta = newMs - oldMs;
+      if (delta > 0) {
+        this._timeSessionService.addSession(this.taskCopy.id, date, delta);
+      } else if (delta < 0) {
+        this._timeSessionService.trimSessionsByAmount(this.taskCopy.id, date, -delta);
+      }
+    }
+
     this._matDialogRef.close({
       timeEstimate: this.taskCopy.timeEstimate,
       timeSpentOnDay: this.timeSpentOnDayCopy,

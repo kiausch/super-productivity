@@ -334,15 +334,16 @@ export class IdleEffects {
           let taskItemId: string | undefined;
           taskItems.forEach((taskItem) => {
             if (typeof taskItem.title === 'string') {
-              taskItemId = this._taskService.add(taskItem.title, false, {
-                timeSpent: taskItem.time,
-                timeSpentOnDay: {
-                  [this._dateService.todayStr()]: taskItem.time,
-                },
-              });
+              taskItemId = this._taskService.add(taskItem.title, false, {});
             } else if (taskItem.task) {
               taskItemId = taskItem.task.id;
-              this._taskService.addTimeSpentAndSync(taskItem.task, taskItem.time);
+            }
+            if (taskItemId) {
+              this._timeSessionService.addSession(
+                taskItemId,
+                this._dateService.todayStr(),
+                taskItem.time,
+              );
             }
           });
 

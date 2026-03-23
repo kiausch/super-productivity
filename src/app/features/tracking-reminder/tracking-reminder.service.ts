@@ -36,6 +36,7 @@ import {
 } from '../focus-mode/store/focus-mode.selectors';
 import { selectIsFocusModeEnabled } from '../config/store/global-config.reducer';
 import { FocusScreen } from '../focus-mode/focus-mode.model';
+import { TimeSessionService } from '../time-session/time-session.service';
 
 const DESKTOP_NOTIFICATION_THROTTLE = 60 * 1000;
 
@@ -54,6 +55,7 @@ export class TrackingReminderService {
   private _notifyService = inject(NotifyService);
   private _uiHelperService = inject(UiHelperService);
   private _store = inject(Store);
+  private _timeSessionService = inject(TimeSessionService);
 
   _cfg$: Observable<TimeTrackingConfig> = this._globalConfigService.cfg$.pipe(
     map((cfg) => cfg?.timeTracking),
@@ -206,18 +208,14 @@ export class TrackingReminderService {
 
           if (task) {
             this._takeABreakService.otherNoBreakTIme$.next(timeSpent);
-            if (typeof task === 'string') {
-              const currId = this._taskService.add(task, false, {
-                timeSpent,
-                timeSpentOnDay: {
-                  [this._dateService.todayStr()]: timeSpent,
-                },
-              });
-              this._taskService.setCurrentId(currId);
-            } else {
-              this._taskService.addTimeSpentAndSync(task, timeSpent);
-              this._taskService.setCurrentId(task.id);
-            }
+            const taskId =
+              typeof task === 'string' ? this._taskService.add(task, false, {}) : task.id;
+            this._timeSessionService.addSession(
+              taskId,
+              this._dateService.todayStr(),
+              timeSpent,
+            );
+            this._taskService.setCurrentId(taskId);
           }
           this._dismissBanner();
         },

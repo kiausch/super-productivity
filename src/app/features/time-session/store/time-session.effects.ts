@@ -1,77 +1,72 @@
 import { inject, Injectable } from '@angular/core';
-import { Actions, createEffect, ofType } from '@ngrx/effects';
-import { map, tap } from 'rxjs/operators';
+import { Store } from '@ngrx/store';
+import { createEffect, ofType } from '@ngrx/effects';
+import { filter, finalize, map, switchMap, takeUntil } from 'rxjs/operators';
+import { merge } from 'rxjs';
 import { setCurrentTask, unsetCurrentTask } from '../../tasks/store/task.actions';
-import { addTimeSession } from './time-session.actions';
+import { addTimeSession, tickUpdateTaskTime } from './time-session.actions';
 import { nanoid } from 'nanoid';
 import { getDbDateStr } from '../../../util/get-db-date-str';
+import { LOCAL_ACTIONS } from '../../../util/local-actions.token';
+import { GlobalTrackingIntervalService } from '../../../core/global-tracking-interval/global-tracking-interval.service';
+
+const MIN_SESSION_DURATION_MS = 10_000;
 
 /**
- * Tracks in-memory task start timestamps when a task is started and
- * emits a TimeSession 'Add time session' action when tracking is stopped.
+ * Manages live time-tracking sessions.
+ *
+ * Per-tick behaviour (non-persistent):
+ *   Dispatches `tickUpdateTaskTime` on every interval tick so the UI shows
+ *   live progress without writing to the op-log.
+ *
+ * Session commit (persistent, once per tracking period):
+ *   When tracking stops or the active task switches, `finalize()` runs and
+ *   dispatches a single `addTimeSession` (op-log write) if the session lasted
+ *   at least MIN_SESSION_DURATION_MS.  This mirrors the old `addTimeSpent`
+ *   approach where only a periodic flush was ever written to persistent storage.
  */
 @Injectable()
 export class TimeSessionEffects {
-  private _actions$ = inject(Actions);
+  private _actions$ = inject(LOCAL_ACTIONS);
+  private _trackingService = inject(GlobalTrackingIntervalService);
+  private _store = inject(Store);
 
-  // map of taskId -> startTs
-  private _startMap = new Map<string, number>();
-  private _lastStartedTaskId: string | null = null;
-
-  // record start time when a task is set as current
-  recordStart$ = createEffect(
-    () =>
-      this._actions$.pipe(
-        ofType(setCurrentTask),
-        tap(({ id }) => {
-          if (!id) {
-            return;
-          }
-          this._startMap.set(id, Date.now());
-          this._lastStartedTaskId = id;
-        }),
-      ),
-    { dispatch: false },
-  );
-
-  // on unset, close last started task and emit addTimeSession
-  closeSession$ = createEffect(() =>
+  liveSession$ = createEffect(() =>
     this._actions$.pipe(
-      ofType(unsetCurrentTask),
-      map(() => {
-        const taskId = this._lastStartedTaskId;
-        if (!taskId) {
-          return { type: '[TimeSession] Noop' } as any;
-        }
-        const start = this._startMap.get(taskId);
-        if (!start) {
-          // nothing recorded
-          this._lastStartedTaskId = null;
-          return { type: '[TimeSession] Noop' } as any;
-        }
-        const end = Date.now();
-        const duration = Math.max(0, end - start);
-        // cleanup
-        this._startMap.delete(taskId);
-        this._lastStartedTaskId = null;
+      ofType(setCurrentTask),
+      filter(({ id }) => !!id),
+      switchMap(({ id }) => {
+        const startTime = Date.now();
 
-        // only save session if duration is longer than 10 seconds
-        if (duration < 10000) {
-          return { type: '[TimeSession] Noop' } as any;
-        }
-
-        // Create TimeSession entry
-        const timeSession = {
-          id: nanoid(),
-          tid: taskId,
-          d: getDbDateStr(start),
-          s: start,
-          t: duration,
-        };
-
-        return addTimeSession({
-          timeSession,
-        });
+        return this._trackingService.tick$.pipe(
+          map((tick) =>
+            tickUpdateTaskTime({ taskId: id!, date: tick.date, duration: tick.duration }),
+          ),
+          // unsetCurrentTask completes the inner observable;
+          // a new setCurrentTask is handled by switchMap (also triggers finalize)
+          takeUntil(
+            merge(
+              this._actions$.pipe(ofType(unsetCurrentTask)),
+              this._actions$.pipe(ofType(setCurrentTask)),
+            ),
+          ),
+          finalize(() => {
+            const elapsed = Date.now() - startTime;
+            if (elapsed >= MIN_SESSION_DURATION_MS) {
+              this._store.dispatch(
+                addTimeSession({
+                  timeSession: {
+                    id: nanoid(),
+                    tid: id!,
+                    d: getDbDateStr(startTime),
+                    s: startTime,
+                    t: elapsed,
+                  },
+                }),
+              );
+            }
+          }),
+        );
       }),
     ),
   );

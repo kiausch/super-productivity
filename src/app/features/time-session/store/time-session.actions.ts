@@ -1,4 +1,4 @@
-import { createAction } from '@ngrx/store';
+import { createAction, props } from '@ngrx/store';
 import { TimeSession } from '../time-session.model';
 import { PersistentActionMeta } from '../../../op-log/core/persistent-action.interface';
 import { OpType } from '../../../op-log/core/operation.types';
@@ -52,4 +52,14 @@ export const deleteTimeSession = createAction(
       opType: OpType.Delete,
     } satisfies PersistentActionMeta,
   }),
+);
+
+/**
+ * Non-persistent action dispatched on every tracking tick (~1s interval).
+ * Updates task.timeSpentOnDay incrementally for live UI progress without writing
+ * to the op-log. The permanent session record is written once when tracking stops.
+ */
+export const tickUpdateTaskTime = createAction(
+  '[TimeSession] Tick Update Task Time',
+  props<{ taskId: string; date: string; duration: number }>(),
 );

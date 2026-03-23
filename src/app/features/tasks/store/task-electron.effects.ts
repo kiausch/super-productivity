@@ -14,7 +14,10 @@ import { selectCurrentTask, selectTaskEntities } from './task.selectors';
 import { selectTodayTaskIds } from '../../work-context/store/work-context.selectors';
 import { GlobalConfigService } from '../../config/global-config.service';
 import { selectIsOverlayShown } from '../../focus-mode/store/focus-mode.selectors';
-import { TimeTrackingActions } from '../../time-tracking/store/time-tracking.actions';
+import {
+  addTimeSession,
+  updateTimeSession,
+} from '../../time-session/store/time-session.actions';
 import { FocusModeService } from '../../focus-mode/focus-mode.service';
 import {
   cancelFocusSession,
@@ -109,7 +112,8 @@ export class TaskElectronEffects {
         ofType(
           setCurrentTask,
           unsetCurrentTask,
-          TimeTrackingActions.addTimeSpent,
+          addTimeSession,
+          updateTimeSession,
           showFocusOverlay,
           hideFocusOverlay,
           startFocusSession,
@@ -180,15 +184,15 @@ export class TaskElectronEffects {
   setTaskBarProgress$ = createEffect(
     () =>
       this._actions$.pipe(
-        ofType(TimeTrackingActions.addTimeSpent),
-        // The OS taskbar progress bar moves imperceptibly per second; throttling
-        // collapses 1 IPC/sec into ~1 IPC/3s. Leading+trailing keeps the first
-        // tick after start instant and the final value at the end of a window.
-        throttleTime(3000, undefined, { leading: true, trailing: true }),
-        withLatestFrom(this._store$.select(selectIsOverlayShown)),
+        ofType(addTimeSession, updateTimeSession),
+        withLatestFrom(
+          this._store$.pipe(select(selectCurrentTask)),
+          this._store$.select(selectIsOverlayShown),
+        ),
         // Don't show progress bar when focus session is running
-        filter(([a, isFocusSessionRunning]) => !isFocusSessionRunning),
-        tap(([{ task }]) => {
+        filter(([, , isFocusSessionRunning]) => !isFocusSessionRunning),
+        tap(([, task]) => {
+          if (!task || !task.timeEstimate) return;
           const progress = task.timeSpent / task.timeEstimate;
           window.ea.setProgressBar({
             progress,

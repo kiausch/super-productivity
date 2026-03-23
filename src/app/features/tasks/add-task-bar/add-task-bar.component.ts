@@ -27,6 +27,7 @@ import { blendInOutAnimation } from 'src/app/ui/animations/blend-in-out.ani';
 import { fadeAnimation } from '../../../ui/animations/fade.ani';
 import { TaskCopy, TaskReminderOptionId } from '../task.model';
 import { TaskService } from '../task.service';
+import { TimeSessionService } from '../../time-session/time-session.service';
 import { WorkContextService } from '../../work-context/work-context.service';
 import { WorkContext, WorkContextType } from '../../work-context/work-context.model';
 import { ProjectService } from '../../project/project.service';
@@ -108,6 +109,7 @@ import { DateService } from '../../../core/date/date.service';
 })
 export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
   private readonly _taskService = inject(TaskService);
+  private readonly _timeSessionService = inject(TimeSessionService);
   private readonly _workContextService = inject(WorkContextService);
   private readonly _projectService = inject(ProjectService);
   private readonly _tagService = inject(TagService);
@@ -433,10 +435,6 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
             : additionalFields?.attachments || [],
       };
 
-      if (state.spent) {
-        taskData.timeSpentOnDay = state.spent;
-      }
-
       if (state.date) {
         // Parse date components to create date in local timezone
         // This avoids timezone issues when parsing date strings like "2024-01-15"
@@ -484,6 +482,16 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
         !!state.repeatQuickSetting &&
         state.repeatQuickSetting !== 'CUSTOM' &&
         !!state.time;
+
+      // Dispatch sessions for time already spent (from short-syntax, e.g. "task 1h")
+      if (state.spent) {
+        for (const [date, ms] of Object.entries(state.spent)) {
+          if (ms > 0) {
+            this._timeSessionService.addSession(taskId, date, ms);
+          }
+        }
+      }
+
       if (taskData.dueWithTime && !isTimedRepeatTask) {
         this._taskService
           .getByIdOnce$(taskId)
