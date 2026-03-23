@@ -4,10 +4,6 @@ import { initialTaskState, taskReducer } from './task.reducer';
 import * as fromActions from './task.actions';
 import { TaskSharedActions } from '../../../root-store/meta/task-shared.actions';
 import { INBOX_PROJECT } from '../../project/project.const';
-import {
-  TimeTrackingActions,
-  syncTimeSpent,
-} from '../../time-tracking/store/time-tracking.actions';
 import { _resetDevErrorState } from '../../../util/dev-error';
 import { PlannerActions } from '../../planner/store/planner.actions';
 
@@ -617,118 +613,6 @@ describe('Task Reducer', () => {
     });
   });
 
-  describe('Incremental parent time update optimization', () => {
-    const createTaskWithTime = (
-      id: string,
-      timeSpentOnDay: { [key: string]: number },
-      parentId?: string,
-    ): Task =>
-      createTask(id, {
-        timeSpentOnDay,
-        timeSpent: Object.values(timeSpentOnDay).reduce((a, b) => a + b, 0),
-        parentId,
-      });
-
-    it('should incrementally update parent timeSpentOnDay when subtask time is added', () => {
-      const parentTask = createTaskWithTime('parent', {
-        '2024-01-01': 3600,
-        '2024-01-02': 1800,
-      });
-      const subtask1 = createTaskWithTime(
-        'sub1',
-        { '2024-01-01': 1800, '2024-01-02': 900 },
-        'parent',
-      );
-      const subtask2 = createTaskWithTime(
-        'sub2',
-        { '2024-01-01': 1800, '2024-01-02': 900 },
-        'parent',
-      );
-
-      const stateWithParent: TaskState = {
-        ...initialTaskState,
-        ids: ['parent', 'sub1', 'sub2'],
-        entities: {
-          parent: { ...parentTask, subTaskIds: ['sub1', 'sub2'] },
-          sub1: subtask1,
-          sub2: subtask2,
-        },
-      };
-
-      // Add 600ms to subtask1 on 2024-01-01
-      const action = TimeTrackingActions.addTimeSpent({
-        task: subtask1,
-        date: '2024-01-01',
-        duration: 600,
-        isFromTrackingReminder: false,
-      });
-      const state = taskReducer(stateWithParent, action);
-
-      // Parent should have incremental update: 3600 + 600 = 4200 for 01-01
-      expect(state.entities['parent']!.timeSpentOnDay['2024-01-01']).toBe(4200);
-      expect(state.entities['parent']!.timeSpentOnDay['2024-01-02']).toBe(1800);
-      expect(state.entities['parent']!.timeSpent).toBe(6000); // 4200 + 1800
-    });
-
-    it('should handle adding time to a new day', () => {
-      const parentTask = createTaskWithTime('parent', { '2024-01-01': 3600 });
-      const subtask = createTaskWithTime('sub', { '2024-01-01': 3600 }, 'parent');
-
-      const stateWithParent: TaskState = {
-        ...initialTaskState,
-        ids: ['parent', 'sub'],
-        entities: {
-          parent: { ...parentTask, subTaskIds: ['sub'] },
-          sub: subtask,
-        },
-      };
-
-      // Add time to a new day (2024-01-02)
-      const action = TimeTrackingActions.addTimeSpent({
-        task: subtask,
-        date: '2024-01-02',
-        duration: 1800,
-        isFromTrackingReminder: false,
-      });
-      const state = taskReducer(stateWithParent, action);
-
-      expect(state.entities['parent']!.timeSpentOnDay['2024-01-01']).toBe(3600);
-      expect(state.entities['parent']!.timeSpentOnDay['2024-01-02']).toBe(1800);
-      expect(state.entities['parent']!.timeSpent).toBe(5400);
-    });
-
-    it('should correctly update subtask and parent timeSpent totals', () => {
-      const parentTask = createTaskWithTime('parent', { '2024-01-01': 1000 });
-      const subtask = createTaskWithTime('sub', { '2024-01-01': 1000 }, 'parent');
-
-      const stateWithParent: TaskState = {
-        ...initialTaskState,
-        ids: ['parent', 'sub'],
-        entities: {
-          parent: { ...parentTask, subTaskIds: ['sub'] },
-          sub: subtask,
-        },
-      };
-
-      // Add more time
-      const action = TimeTrackingActions.addTimeSpent({
-        task: subtask,
-        date: '2024-01-01',
-        duration: 500,
-        isFromTrackingReminder: false,
-      });
-      const state = taskReducer(stateWithParent, action);
-
-      // Subtask should have updated timeSpent
-      expect(state.entities['sub']!.timeSpentOnDay['2024-01-01']).toBe(1500);
-      expect(state.entities['sub']!.timeSpent).toBe(1500);
-
-      // Parent should have incremental update
-      expect(state.entities['parent']!.timeSpentOnDay['2024-01-01']).toBe(1500);
-      expect(state.entities['parent']!.timeSpent).toBe(1500);
-    });
-  });
-
   describe('moveToArchive action - orphan subtask handling', () => {
     // These tests document the defensive fix for a race condition where:
     // 1. Client A adds subtask to parent
@@ -825,56 +709,6 @@ describe('Task Reducer', () => {
 
       // Current task should be cleared since orphan subtask was removed
       expect(state.currentTaskId).toBeNull();
-    });
-  });
-
-  describe('syncTimeSpent', () => {
-    it('should be a no-op for local dispatch', () => {
-      const action = syncTimeSpent({
-        taskId: 'task1',
-        date: '2024-01-01',
-        duration: 5000,
-      });
-
-      const state = taskReducer(stateWithTasks, action);
-
-      expect(state).toBe(stateWithTasks);
-    });
-
-    it('should apply duration for remote dispatch', () => {
-      const taskWithTime = createTask('task-r', {
-        timeSpentOnDay: { '2024-01-01': 3000 },
-        timeSpent: 3000,
-      });
-      const stateWithTime: TaskState = {
-        ...initialTaskState,
-        ids: ['task-r'],
-        entities: { 'task-r': taskWithTime },
-      };
-
-      const action = syncTimeSpent({
-        taskId: 'task-r',
-        date: '2024-01-01',
-        duration: 5000,
-      });
-      // Simulate remote by adding isRemote flag
-      const remoteAction = { ...action, meta: { ...action.meta, isRemote: true } };
-      const state = taskReducer(stateWithTime, remoteAction);
-
-      expect(state.entities['task-r']!.timeSpentOnDay['2024-01-01']).toBe(8000);
-      expect(state.entities['task-r']!.timeSpent).toBe(8000);
-    });
-
-    it('should handle remote dispatch for missing task gracefully', () => {
-      const action = syncTimeSpent({
-        taskId: 'nonexistent',
-        date: '2024-01-01',
-        duration: 5000,
-      });
-      const remoteAction = { ...action, meta: { ...action.meta, isRemote: true } };
-      const state = taskReducer(stateWithTasks, remoteAction);
-
-      expect(state).toBe(stateWithTasks);
     });
   });
 

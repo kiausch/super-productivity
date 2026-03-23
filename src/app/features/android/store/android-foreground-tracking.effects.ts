@@ -23,7 +23,7 @@ import { HydrationStateService } from '../../../op-log/apply/hydration-state.ser
 import { SnackService } from '../../../core/snack/snack.service';
 import { GlobalTrackingIntervalService } from '../../../core/global-tracking-interval/global-tracking-interval.service';
 import { OperationWriteFlushService } from '../../../op-log/sync/operation-write-flush.service';
-import { syncTimeSpent } from '../../time-tracking/store/time-tracking.actions';
+import { TimeSessionService } from '../../time-session/time-session.service';
 
 @Injectable()
 export class AndroidForegroundTrackingEffects {
@@ -34,6 +34,7 @@ export class AndroidForegroundTrackingEffects {
   private _snackService = inject(SnackService);
   private _globalTrackingIntervalService = inject(GlobalTrackingIntervalService);
   private _operationWriteFlush = inject(OperationWriteFlushService);
+  private _timeSessionService = inject(TimeSessionService);
 
   /**
    * Start/stop the native foreground service when the current task changes.
@@ -372,15 +373,10 @@ export class AndroidForegroundTrackingEffects {
       }
 
       if (duration > 0) {
-        this._taskService.addTimeSpent(task, duration, this._dateService.todayStr());
-        // Also dispatch syncTimeSpent to capture in operation log
-        // addTimeSpent only updates local state, syncTimeSpent creates the operation
-        this._store.dispatch(
-          syncTimeSpent({
-            taskId: task.id,
-            date: this._dateService.todayStr(),
-            duration,
-          }),
+        this._timeSessionService.addSession(
+          task.id,
+          this._dateService.todayStr(),
+          duration,
         );
         // Reset the tracking interval to prevent double-counting
         // The native service has the authoritative time, so we reset the app's

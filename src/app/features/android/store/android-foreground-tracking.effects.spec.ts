@@ -525,7 +525,7 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
    * Uses firstValueFrom for reliable observable handling (fixes issue #5840).
    */
 
-  let addTimeSpentSpy: jasmine.Spy;
+  let addSessionSpy: jasmine.Spy;
   let resetTrackingStartSpy: jasmine.Spy;
 
   // Replicate the sync logic for testing
@@ -533,7 +533,7 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
     taskId: string,
     elapsedJson: string | null,
     getTask: (id: string) => Promise<{ id: string; timeSpent: number } | null>,
-    addTimeSpent: (task: unknown, duration: number, date: string) => void,
+    addSession: (taskId: string, date: string, duration: number) => void,
     resetTrackingStart: () => void,
     todayStr: string,
   ): Promise<void> => {
@@ -561,7 +561,7 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       const duration = nativeData.elapsedMs - currentTimeSpent;
 
       if (duration > 0) {
-        addTimeSpent(task, duration, todayStr);
+        addSession(task.id, todayStr, duration);
         resetTrackingStart();
       }
     } catch {
@@ -570,7 +570,7 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
   };
 
   beforeEach(() => {
-    addTimeSpentSpy = jasmine.createSpy('addTimeSpent');
+    addSessionSpy = jasmine.createSpy('addSession');
     resetTrackingStartSpy = jasmine.createSpy('resetTrackingStart');
   });
 
@@ -589,16 +589,12 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
 
-    expect(addTimeSpentSpy).toHaveBeenCalledWith(
-      { id: 'task-1', timeSpent: appTimeSpent },
-      expectedDuration,
-      '2024-01-01',
-    );
+    expect(addSessionSpy).toHaveBeenCalledWith('task-1', '2024-01-01', expectedDuration);
   });
 
   it('should NOT add time when native and app times match', async () => {
@@ -613,12 +609,12 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
 
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
   });
 
   it('should handle null elapsedJson gracefully', async () => {
@@ -631,12 +627,12 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       null,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
 
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
     expect(resetTrackingStartSpy).not.toHaveBeenCalled();
   });
 
@@ -650,12 +646,12 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       'null',
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
 
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
     expect(resetTrackingStartSpy).not.toHaveBeenCalled();
   });
 
@@ -670,7 +666,7 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
@@ -689,7 +685,7 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
@@ -708,12 +704,12 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1', // We want to sync task-1
       elapsedJson, // But native is tracking task-2
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
 
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
     expect(resetTrackingStartSpy).not.toHaveBeenCalled();
   });
 
@@ -725,12 +721,12 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
 
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
     expect(resetTrackingStartSpy).not.toHaveBeenCalled();
   });
 
@@ -744,12 +740,12 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       'invalid json {',
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
 
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
     expect(resetTrackingStartSpy).not.toHaveBeenCalled();
   });
 
@@ -764,16 +760,12 @@ describe('AndroidForegroundTrackingEffects - syncElapsedTimeForTask logic', () =
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       '2024-01-01',
     );
 
-    expect(addTimeSpentSpy).toHaveBeenCalledWith(
-      { id: 'task-1', timeSpent: 0 },
-      300000, // Full 5 minutes should be added
-      '2024-01-01',
-    );
+    expect(addSessionSpy).toHaveBeenCalledWith('task-1', '2024-01-01', 300000);
     expect(resetTrackingStartSpy).toHaveBeenCalledTimes(1);
   });
 });
@@ -1072,245 +1064,6 @@ describe('AndroidForegroundTrackingEffects - flushOnPause logic (issue #6207)', 
   });
 });
 
-describe('AndroidForegroundTrackingEffects - syncTimeSpent dispatch (issue #6207)', () => {
-  /**
-   * Tests for the fix: _syncElapsedTimeForTask must dispatch syncTimeSpent action
-   * in addition to calling addTimeSpent to ensure time is captured in operation log.
-   *
-   * The bug: addTimeSpent only updates local NgRx state but does NOT create an
-   * operation in the log. When syncing time from native service after app resume,
-   * this meant time would be lost if the app was closed before the next flush.
-   *
-   * The fix: After calling addTimeSpent (updates local state), also dispatch
-   * syncTimeSpent (creates operation in log for persistence).
-   */
-
-  let addTimeSpentSpy: jasmine.Spy;
-  let dispatchSpy: jasmine.Spy;
-  let resetTrackingStartSpy: jasmine.Spy;
-  let snackOpenSpy: jasmine.Spy;
-
-  // Replicate the fixed sync logic that dispatches syncTimeSpent
-  const syncElapsedTimeForTaskWithOpLog = async (
-    taskId: string,
-    elapsedJson: string | null,
-    getTask: (id: string) => Promise<{ id: string; timeSpent: number } | null>,
-    addTimeSpent: (task: unknown, duration: number, date: string) => void,
-    dispatch: (action: { taskId: string; date: string; duration: number }) => void,
-    resetTrackingStart: () => void,
-    snackOpen: (params: { msg: string; type: string }) => void,
-    todayStr: string,
-  ): Promise<void> => {
-    if (!elapsedJson || elapsedJson === 'null') {
-      return;
-    }
-
-    try {
-      const nativeData = JSON.parse(elapsedJson) as {
-        taskId: string;
-        elapsedMs: number;
-      };
-
-      if (nativeData.taskId !== taskId) {
-        return;
-      }
-
-      const task = await getTask(taskId);
-      if (!task) {
-        snackOpen({
-          msg: 'Time tracking sync failed - task not found',
-          type: 'WARNING',
-        });
-        return;
-      }
-
-      const currentTimeSpent = task.timeSpent || 0;
-      const duration = nativeData.elapsedMs - currentTimeSpent;
-
-      // Handle negative duration (service crash/reset)
-      // Keep app value to prevent data loss - just reset tracking interval
-      if (duration < 0) {
-        resetTrackingStart();
-        return;
-      }
-
-      if (duration > 0) {
-        addTimeSpent(task, duration, todayStr);
-        // Also dispatch syncTimeSpent to capture in operation log
-        dispatch({ taskId: task.id, date: todayStr, duration });
-        resetTrackingStart();
-      }
-    } catch (e) {
-      snackOpen({
-        msg: 'Time tracking sync failed - please check your tracked time',
-        type: 'WARNING',
-      });
-    }
-  };
-
-  beforeEach(() => {
-    addTimeSpentSpy = jasmine.createSpy('addTimeSpent');
-    dispatchSpy = jasmine.createSpy('dispatch');
-    resetTrackingStartSpy = jasmine.createSpy('resetTrackingStart');
-    snackOpenSpy = jasmine.createSpy('snackService.open');
-  });
-
-  it('should dispatch syncTimeSpent after addTimeSpent for positive duration', async () => {
-    const nativeElapsed = 900000; // 15 minutes
-    const appTimeSpent = 60000; // 1 minute
-    const expectedDuration = nativeElapsed - appTimeSpent; // 14 minutes
-
-    const elapsedJson = JSON.stringify({ taskId: 'task-1', elapsedMs: nativeElapsed });
-    const getTask = async (): Promise<{ id: string; timeSpent: number }> => ({
-      id: 'task-1',
-      timeSpent: appTimeSpent,
-    });
-
-    await syncElapsedTimeForTaskWithOpLog(
-      'task-1',
-      elapsedJson,
-      getTask,
-      addTimeSpentSpy,
-      dispatchSpy,
-      resetTrackingStartSpy,
-      snackOpenSpy,
-      '2024-01-01',
-    );
-
-    expect(addTimeSpentSpy).toHaveBeenCalledWith(
-      { id: 'task-1', timeSpent: appTimeSpent },
-      expectedDuration,
-      '2024-01-01',
-    );
-
-    // Key assertion: syncTimeSpent dispatched with correct params
-    expect(dispatchSpy).toHaveBeenCalledWith({
-      taskId: 'task-1',
-      date: '2024-01-01',
-      duration: expectedDuration,
-    });
-  });
-
-  it('should NOT dispatch syncTimeSpent for negative duration (keeps app value)', async () => {
-    const nativeElapsed = 30000; // 30 seconds (native service restarted)
-    const appTimeSpent = 600000; // 10 minutes
-
-    const elapsedJson = JSON.stringify({ taskId: 'task-1', elapsedMs: nativeElapsed });
-    const getTask = async (): Promise<{ id: string; timeSpent: number }> => ({
-      id: 'task-1',
-      timeSpent: appTimeSpent,
-    });
-
-    await syncElapsedTimeForTaskWithOpLog(
-      'task-1',
-      elapsedJson,
-      getTask,
-      addTimeSpentSpy,
-      dispatchSpy,
-      resetTrackingStartSpy,
-      snackOpenSpy,
-      '2024-01-01',
-    );
-
-    // For negative duration, keep app value - don't update time
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    // Should still reset tracking start to prevent double-counting
-    expect(resetTrackingStartSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('should NOT dispatch syncTimeSpent when duration is zero', async () => {
-    const elapsedMs = 60000;
-    const elapsedJson = JSON.stringify({ taskId: 'task-1', elapsedMs });
-    const getTask = async (): Promise<{ id: string; timeSpent: number }> => ({
-      id: 'task-1',
-      timeSpent: elapsedMs, // Same as native - no sync needed
-    });
-
-    await syncElapsedTimeForTaskWithOpLog(
-      'task-1',
-      elapsedJson,
-      getTask,
-      addTimeSpentSpy,
-      dispatchSpy,
-      resetTrackingStartSpy,
-      snackOpenSpy,
-      '2024-01-01',
-    );
-
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
-    expect(dispatchSpy).not.toHaveBeenCalled();
-  });
-
-  it('should NOT dispatch syncTimeSpent when task not found', async () => {
-    const elapsedJson = JSON.stringify({ taskId: 'task-1', elapsedMs: 60000 });
-    const getTask = async (): Promise<null> => null;
-
-    await syncElapsedTimeForTaskWithOpLog(
-      'task-1',
-      elapsedJson,
-      getTask,
-      addTimeSpentSpy,
-      dispatchSpy,
-      resetTrackingStartSpy,
-      snackOpenSpy,
-      '2024-01-01',
-    );
-
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
-    expect(dispatchSpy).not.toHaveBeenCalled();
-    expect(snackOpenSpy).toHaveBeenCalled();
-  });
-
-  it('should ensure operation log capture for time synced from native on resume', async () => {
-    // This test verifies the specific scenario from issue #6207:
-    // 1. User backgrounds app for extended period (native counts time)
-    // 2. User reopens app (syncOnResume$ fires, calls _syncElapsedTimeForTask)
-    // 3. Time must be captured in operation log so it persists if app closes quickly
-
-    const backgroundTimeMs = 720000; // 12 minutes tracked while backgrounded
-    const existingTimeMs = 120000; // 2 minutes tracked before backgrounding
-    const syncDuration = backgroundTimeMs; // Duration to sync (difference)
-
-    const elapsedJson = JSON.stringify({
-      taskId: 'task-1',
-      elapsedMs: existingTimeMs + backgroundTimeMs, // Total native elapsed
-    });
-
-    const getTask = async (): Promise<{ id: string; timeSpent: number }> => ({
-      id: 'task-1',
-      timeSpent: existingTimeMs, // App only knows about pre-background time
-    });
-
-    await syncElapsedTimeForTaskWithOpLog(
-      'task-1',
-      elapsedJson,
-      getTask,
-      addTimeSpentSpy,
-      dispatchSpy,
-      resetTrackingStartSpy,
-      snackOpenSpy,
-      '2024-01-01',
-    );
-
-    // addTimeSpent updates local NgRx state immediately
-    expect(addTimeSpentSpy).toHaveBeenCalledWith(
-      { id: 'task-1', timeSpent: existingTimeMs },
-      syncDuration,
-      '2024-01-01',
-    );
-
-    // syncTimeSpent creates operation for persistence - THIS IS THE FIX
-    expect(dispatchSpy).toHaveBeenCalledWith({
-      taskId: 'task-1',
-      date: '2024-01-01',
-      duration: syncDuration,
-    });
-
-    // Without the dispatch, the 12 minutes would be lost if app closes before flush
-  });
-});
-
 describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #5842)', () => {
   /**
    * Tests for enhanced error handling in _syncElapsedTimeForTask:
@@ -1319,7 +1072,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
    * - Error notification for sync failures
    */
 
-  let addTimeSpentSpy: jasmine.Spy;
+  let addSessionSpy: jasmine.Spy;
   let resetTrackingStartSpy: jasmine.Spy;
   let snackOpenSpy: jasmine.Spy;
 
@@ -1328,7 +1081,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
     taskId: string,
     elapsedJson: string | null,
     getTask: (id: string) => Promise<{ id: string; timeSpent: number } | null>,
-    addTimeSpent: (task: unknown, duration: number, date: string) => void,
+    addSession: (taskId: string, date: string, duration: number) => void,
     resetTrackingStart: () => void,
     snackOpen: (params: { msg: string; type: string }) => void,
     todayStr: string,
@@ -1367,7 +1120,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
       }
 
       if (duration > 0) {
-        addTimeSpent(task, duration, todayStr);
+        addSession(task.id, todayStr, duration);
         resetTrackingStart();
       }
     } catch (e) {
@@ -1379,7 +1132,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
   };
 
   beforeEach(() => {
-    addTimeSpentSpy = jasmine.createSpy('addTimeSpent');
+    addSessionSpy = jasmine.createSpy('addSession');
     resetTrackingStartSpy = jasmine.createSpy('resetTrackingStart');
     snackOpenSpy = jasmine.createSpy('snackService.open');
   });
@@ -1397,14 +1150,14 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       snackOpenSpy,
       '2024-01-01',
     );
 
     // Should NOT update time - keep app's higher value to prevent data loss
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
     // Should still reset tracking start to prevent double-counting
     expect(resetTrackingStartSpy).toHaveBeenCalledTimes(1);
   });
@@ -1417,7 +1170,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       snackOpenSpy,
       '2024-01-01',
@@ -1427,7 +1180,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
       msg: 'Time tracking sync failed - task not found',
       type: 'WARNING',
     });
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
   });
 
   it('should show snackbar notification on JSON parse error', async () => {
@@ -1440,7 +1193,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
       'task-1',
       'invalid json {',
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       snackOpenSpy,
       '2024-01-01',
@@ -1450,7 +1203,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
       msg: 'Time tracking sync failed - please check your tracked time',
       type: 'WARNING',
     });
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
   });
 
   it('should NOT show notification for successful negative duration handling', async () => {
@@ -1464,7 +1217,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
       'task-1',
       elapsedJson,
       getTask,
-      addTimeSpentSpy,
+      addSessionSpy,
       resetTrackingStartSpy,
       snackOpenSpy,
       '2024-01-01',
@@ -1472,7 +1225,7 @@ describe('AndroidForegroundTrackingEffects - enhanced error handling (issue #584
 
     // Should handle gracefully without user notification (logged as warning)
     // App value is preserved - no update needed
-    expect(addTimeSpentSpy).not.toHaveBeenCalled();
+    expect(addSessionSpy).not.toHaveBeenCalled();
     expect(resetTrackingStartSpy).toHaveBeenCalled();
     expect(snackOpenSpy).not.toHaveBeenCalled();
   });

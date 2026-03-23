@@ -25,8 +25,6 @@ import {
   moveSubTaskToBottom,
   moveSubTaskToTop,
   moveSubTaskUp,
-  removeTimeSpent,
-  roundTimeSpentForDay,
   setCurrentTask,
   setSelectedTask,
   toggleStart,
@@ -36,7 +34,6 @@ import {
 } from './store/task.actions';
 import { IssueProviderKey } from '../issue/issue.model';
 import { GlobalTrackingIntervalService } from '../../core/global-tracking-interval/global-tracking-interval.service';
-import { BatchedTimeSyncAccumulator } from '../../core/util/batched-time-sync-accumulator';
 import {
   selectAllTasks,
   selectCurrentTask,
@@ -85,17 +82,14 @@ import {
 import { Update } from '@ngrx/entity';
 import { RootState } from '../../root-store/root-state';
 import { DateService } from '../../core/date/date.service';
-import {
-  TimeTrackingActions,
-  syncTimeSpent,
-  syncTimeTracking,
-} from '../time-tracking/store/time-tracking.actions';
+import { syncTimeTracking } from '../time-tracking/store/time-tracking.actions';
 import { selectTimeTrackingState } from '../time-tracking/store/time-tracking.selectors';
 import { ArchiveService } from '../archive/archive.service';
 import { TaskArchiveService } from '../archive/task-archive.service';
 import { TODAY_TAG } from '../tag/tag.const';
 import { TaskSharedActions } from '../../root-store/meta/task-shared.actions';
 import { getDbDateStr, isDBDateStr } from '../../util/get-db-date-str';
+import { roundDurationVanilla } from '../../util/round-duration';
 import { INBOX_PROJECT } from '../project/project.const';
 import { GlobalConfigService } from '../config/global-config.service';
 import { TaskLog } from '../../core/log';
@@ -104,6 +98,7 @@ import { DEFAULT_GLOBAL_CONFIG } from '../config/default-global-config.const';
 import { TaskFocusService } from './task-focus.service';
 import { DeletedTaskIssueSidecarService } from '../issue/two-way-sync/deleted-task-issue-sidecar.service';
 import { TimeBlockDeleteSidecarService } from '../calendar-integration/time-block/time-block-delete-sidecar.service';
+import { TimeSessionService } from '../time-session/time-session.service';
 
 @Injectable({
   providedIn: 'root',
@@ -121,6 +116,7 @@ export class TaskService {
   private readonly _taskFocusService = inject(TaskFocusService);
   private readonly _deletedTaskIssueSidecar = inject(DeletedTaskIssueSidecarService);
   private readonly _timeBlockDeleteSidecar = inject(TimeBlockDeleteSidecarService);
+  private readonly _timeSessionService = inject(TimeSessionService);
 
   currentTaskId$: Observable<string | null> = this._store.pipe(
     select(selectCurrentTaskId),
@@ -192,13 +188,6 @@ export class TaskService {
   private _allTasks$: Observable<Task[]> = this._store.pipe(select(selectAllTasks));
   private _taskEntities = this._store.selectSignal(selectTaskEntities);
 
-  // Batch sync for time tracking: accumulates duration per task, syncs every 5 minutes
-  private static readonly SYNC_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-  private _timeAccumulator = new BatchedTimeSyncAccumulator(
-    TaskService.SYNC_INTERVAL_MS,
-    (taskId, date, duration) =>
-      this._store.dispatch(syncTimeSpent({ taskId, date, duration })),
-  );
   private _unsyncedContexts: Map<
     string,
     { contextType: 'TAG' | 'PROJECT'; contextId: string; date: string }
@@ -219,31 +208,19 @@ export class TaskService {
       true,
     );
 
-    // time tracking with batch sync
+    // Track work contexts during tick for TIME_TRACKING sync
     this._timeTrackingService.tick$
       .pipe(
         withLatestFrom(this.currentTask$, this._imexMetaService.isDataImportInProgress$),
       )
       .subscribe(([tick, currentTask, isImportInProgress]) => {
         if (currentTask?.id && !isImportInProgress) {
-          // Update local state immediately (existing behavior)
-          this.addTimeSpent(currentTask, tick.duration, tick.date);
-
-          // Accumulate for batch sync
-          this._timeAccumulator.accumulate(currentTask.id, tick.duration, tick.date);
-
-          // Track contexts for TIME_TRACKING sync
           this._trackContextsForSync(currentTask, tick.date);
-
-          // Check if it's time to sync (every 5 minutes)
-          if (this._timeAccumulator.shouldFlush()) {
-            this._flushAccumulatedTimeSpent();
-          }
         }
       });
 
-    // Flush accumulated time when task stops (currentTaskId becomes null or changes)
-    this.currentTaskId$.subscribe(() => {
+    // Flush context sync when task stops or changes
+    this.currentTaskId$.pipe(distinctUntilChanged()).subscribe(() => {
       this._flushAccumulatedTimeSpent();
     });
 
@@ -280,12 +257,9 @@ export class TaskService {
   }
 
   /**
-   * Dispatches syncTimeSpent for all accumulated time and resets accumulators.
+   * Flushes TIME_TRACKING context sync to other clients.
    */
   private _flushAccumulatedTimeSpent(): void {
-    // Sync task.timeSpent totals
-    this._timeAccumulator.flush();
-
     // Sync TIME_TRACKING session data (start/end times)
     if (this._unsyncedContexts.size > 0) {
       this._store
@@ -786,37 +760,12 @@ export class TaskService {
     });
   }
 
-  addTimeSpent(
-    task: Task,
-    duration: number,
-    date: string = this._dateService.todayStr(),
-    isFromTrackingReminder = false,
-  ): void {
-    this._store.dispatch(
-      TimeTrackingActions.addTimeSpent({ task, date, duration, isFromTrackingReminder }),
-    );
-  }
-
-  /**
-   * Adds time spent to a task AND dispatches the persistent syncTimeSpent action.
-   * Use this instead of addTimeSpent when the caller is NOT using BatchedTimeSyncAccumulator
-   * (e.g. idle dialog, tracking reminder). The tick path uses the accumulator instead.
-   */
-  addTimeSpentAndSync(task: Task, duration: number): void {
-    if (duration <= 0) {
-      return;
-    }
-    const date = this._dateService.todayStr();
-    this.addTimeSpent(task, duration, date);
-    this._store.dispatch(syncTimeSpent({ taskId: task.id, date, duration }));
-  }
-
   removeTimeSpent(
     id: string,
     duration: number,
     date: string = this._dateService.todayStr(),
   ): void {
-    this._store.dispatch(removeTimeSpent({ id, date, duration }));
+    this._timeSessionService.trimSessionsByAmount(id, date, duration);
   }
 
   focusTask(id: string): void {
@@ -973,10 +922,29 @@ export class TaskService {
       }
     });
 
-    // today
-    this._store.dispatch(
-      roundTimeSpentForDay({ day, taskIds: todayIds, roundTo, isRoundUp, projectId }),
-    );
+    // today — replace sessions for each leaf task on this day with a rounded consolidated session
+    const isLimitToProject = !!projectId || projectId === null;
+    const allSessions = this._timeSessionService.allSessions();
+    const idsToProcess = todayIds.filter((id) => {
+      const task = taskState.entities[id];
+      if (!task) return false;
+      return (
+        (task.subTaskIds.length === 0 || !!task.parentId) &&
+        (!isLimitToProject || task.projectId === projectId)
+      );
+    });
+    for (const id of idsToProcess) {
+      const sessionsForDay = allSessions.filter((s) => s.tid === id && s.d === day);
+      const currentTotal = sessionsForDay.reduce((sum, s) => sum + s.t, 0);
+      if (currentTotal === 0) continue;
+      const roundedTotal = roundDurationVanilla(currentTotal, roundTo, isRoundUp);
+      for (const session of sessionsForDay) {
+        this._timeSessionService.deleteSession(session.id);
+      }
+      if (roundedTotal > 0) {
+        this._timeSessionService.addSession(id, day, roundedTotal);
+      }
+    }
 
     // archive
     await this._taskArchiveService.roundTimeSpent({

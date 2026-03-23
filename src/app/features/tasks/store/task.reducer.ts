@@ -1,4 +1,3 @@
-import { PersistentActionMeta } from '../../../op-log/core/persistent-action.interface';
 import {
   __updateMultipleTaskSimple,
   addSubTask,
@@ -45,12 +44,9 @@ import { unique } from '../../../util/unique';
 import { roundDurationVanilla } from '../../../util/round-duration';
 import { loadAllData } from '../../../root-store/meta/load-all-data.action';
 import { createReducer, on } from '@ngrx/store';
+import { tickUpdateTaskTime } from '../../time-session/store/time-session.actions';
 import { PlannerActions } from '../../planner/store/planner.actions';
 import { TaskSharedActions } from '../../../root-store/meta/task-shared.actions';
-import {
-  TimeTrackingActions,
-  syncTimeSpent,
-} from '../../time-tracking/store/time-tracking.actions';
 import { TaskLog } from '../../../core/log';
 import { devError } from '../../../util/dev-error';
 
@@ -123,47 +119,6 @@ export const taskReducer = createReducer<TaskState>(
           ? null
           : state.currentTaskId,
     });
-  }),
-
-  on(TimeTrackingActions.addTimeSpent, (state, { task, date, duration }) => {
-    const currentTimeSpentForTickDay =
-      (task.timeSpentOnDay && +task.timeSpentOnDay[date]) || 0;
-    return updateTimeSpentForTask(
-      task.id,
-      {
-        ...task.timeSpentOnDay,
-        [date]: currentTimeSpentForTickDay + duration,
-      },
-      state,
-    );
-  }),
-
-  // Sync time spent from remote clients
-  // Local: no-op (state already updated by addTimeSpent ticks)
-  // Remote: apply the batched duration
-  on(syncTimeSpent, (state, action) => {
-    // Only apply for remote actions - local state is already up-to-date
-    if (!(action.meta as PersistentActionMeta).isRemote) {
-      return state;
-    }
-
-    const { taskId, date, duration } = action;
-    const task = state.entities[taskId];
-    if (!task) {
-      TaskLog.warn(`[syncTimeSpent] Task ${taskId} not found, skipping`);
-      return state;
-    }
-
-    const currentTimeSpentForDay =
-      (task.timeSpentOnDay && +task.timeSpentOnDay[date]) || 0;
-    return updateTimeSpentForTask(
-      taskId,
-      {
-        ...task.timeSpentOnDay,
-        [date]: currentTimeSpentForDay + duration,
-      },
-      state,
-    );
   }),
 
   //--------------------------------
@@ -438,6 +393,17 @@ export const taskReducer = createReducer<TaskState>(
           subTaskIds: arrayMoveToEnd(parentSubTaskIds, id),
         },
       },
+      state,
+    );
+  }),
+
+  on(tickUpdateTaskTime, (state, { taskId, date, duration }) => {
+    const task = getTaskById(taskId, state);
+    const currentTimeSpentForTickDay =
+      (task.timeSpentOnDay && +task.timeSpentOnDay[date]) || 0;
+    return updateTimeSpentForTask(
+      taskId,
+      { ...task.timeSpentOnDay, [date]: currentTimeSpentForTickDay + duration },
       state,
     );
   }),

@@ -31,6 +31,8 @@ import {
   reCalcTimeEstimateForParentIfParent,
   updateTimeSpentForTask,
 } from '../../../features/tasks/store/task.reducer.util';
+import { nanoid } from 'nanoid';
+import { TIME_SESSION_FEATURE_KEY } from '../../../features/time-session/store/time-session.reducer';
 
 // Type for mutable task changes within the reducer
 type MutableTaskChanges = { -readonly [K in keyof Task]?: Task[K] };
@@ -122,6 +124,13 @@ const handleApplyShortSyntax = (
   // Handle timeSpentOnDay separately to ensure proper timeSpent calculation and parent updates
   let taskState = updatedState[TASK_FEATURE_NAME];
 
+  // TODO: change how timeSpent is mapped to sessions
+  // Currently, when timeSpentOnDay is updated via short syntax, we override all existing sessions
+  // for that task+date with a single consolidated session representing the new total time for that
+  // day. This way it loses session granularity and metadata (like start times) and can cause issues
+  // if there are already multiple sessions for that day. A more robust approach would be to redefine
+  // the short syntax for timeSpent to only allow to add new sessions and defer more sophisticated edits
+  // (like merging/splitting sessions, editing start times etc.) to a dedicated UI for session management.
   if (finalTaskChanges.timeSpentOnDay) {
     // Merge with existing timeSpentOnDay
     const mergedTimeSpentOnDay = {
@@ -130,6 +139,24 @@ const handleApplyShortSyntax = (
     };
     // Use updateTimeSpentForTask which calculates timeSpent and handles parent aggregation
     taskState = updateTimeSpentForTask(task.id, mergedTimeSpentOnDay, taskState);
+    // Also sync sessions so they remain the source of truth.
+    // For each date overridden by short syntax, replace all existing sessions for
+    // that task+date with a single consolidated session representing the new total.
+    let sessions = updatedState[TIME_SESSION_FEATURE_KEY].sessions;
+    for (const [date] of Object.entries(finalTaskChanges.timeSpentOnDay)) {
+      const mergedMs = mergedTimeSpentOnDay[date] ?? 0;
+      sessions = sessions.filter((s) => !(s.tid === task.id && s.d === date));
+      if (mergedMs > 0) {
+        sessions = [...sessions, { id: nanoid(), tid: task.id, d: date, t: mergedMs }];
+      }
+    }
+    updatedState = {
+      ...updatedState,
+      [TIME_SESSION_FEATURE_KEY]: {
+        ...updatedState[TIME_SESSION_FEATURE_KEY],
+        sessions,
+      },
+    };
     // Remove timeSpentOnDay from finalTaskChanges since it's been handled
     delete finalTaskChanges.timeSpentOnDay;
   }

@@ -16,6 +16,7 @@ import { plannerSharedMetaReducer } from './task-shared-meta-reducers/planner-sh
 import { shortSyntaxSharedMetaReducer } from './task-shared-meta-reducers/short-syntax-shared.reducer';
 import { lwwUpdateMetaReducer } from './task-shared-meta-reducers/lww-update.meta-reducer';
 import { timeSessionSharedMetaReducer } from './task-shared-meta-reducers/time-session-shared.reducer';
+import { sessionToTaskTimeMetaReducer } from './task-shared-meta-reducers/session-to-task-time.meta-reducer';
 import { actionLoggerReducer } from './action-logger.reducer';
 
 /**
@@ -106,6 +107,7 @@ export const META_REDUCERS: MetaReducer[] = [
   issueProviderSharedMetaReducer, // Issue provider unlinking
   taskRepeatCfgSharedMetaReducer, // Repeat config unlinking
   timeSessionSharedMetaReducer, // Task deletion → cleanup time sessions
+  sessionToTaskTimeMetaReducer, // Session changes → materialise task.timeSpentOnDay/timeSpent
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PHASE 6: PLANNER SYNCHRONIZATION (Must run AFTER scheduling)

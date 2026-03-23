@@ -27,12 +27,14 @@ import { TODAY_TAG } from '../tag/tag.const';
 import { INBOX_PROJECT } from '../project/project.const';
 import { signal } from '@angular/core';
 import { DeletedTaskIssueSidecarService } from '../issue/two-way-sync/deleted-task-issue-sidecar.service';
+import { TimeSessionService } from '../time-session/time-session.service';
 
 describe('TaskService', () => {
   let service: TaskService;
   let store: MockStore;
   let archiveService: jasmine.SpyObj<ArchiveService>;
   let deletedTaskIssueSidecar: DeletedTaskIssueSidecarService;
+  let timeSessionService: jasmine.SpyObj<TimeSessionService>;
   let tickSubject: Subject<{ duration: number; date: string }>;
 
   const createMockTask = (id: string, overrides: Partial<Task> = {}): Task =>
@@ -124,6 +126,14 @@ describe('TaskService', () => {
       isDataImportInProgress$: of(false),
     });
 
+    const timeSessionServiceSpy = jasmine.createSpyObj(
+      'TimeSessionService',
+      ['trimSessionsByAmount', 'deleteSession', 'addSession'],
+      {
+        allSessions: signal([]),
+      },
+    );
+
     TestBed.configureTestingModule({
       providers: [
         TaskService,
@@ -155,6 +165,7 @@ describe('TaskService', () => {
         { provide: GlobalConfigService, useValue: globalConfigServiceSpy },
         { provide: TaskFocusService, useValue: taskFocusServiceSpy },
         { provide: ImexViewService, useValue: imexViewServiceSpy },
+        { provide: TimeSessionService, useValue: timeSessionServiceSpy },
       ],
     });
 
@@ -162,6 +173,9 @@ describe('TaskService', () => {
     store = TestBed.inject(MockStore);
     archiveService = TestBed.inject(ArchiveService) as jasmine.SpyObj<ArchiveService>;
     deletedTaskIssueSidecar = TestBed.inject(DeletedTaskIssueSidecarService);
+    timeSessionService = TestBed.inject(
+      TimeSessionService,
+    ) as jasmine.SpyObj<TimeSessionService>;
 
     spyOn(store, 'dispatch').and.callThrough();
   });
@@ -723,105 +737,14 @@ describe('TaskService', () => {
     });
   });
 
-  describe('addTimeSpent', () => {
-    it('should dispatch addTimeSpent action', () => {
-      const task = createMockTask('task-1');
-
-      service.addTimeSpent(task, 60000);
-
-      expect(store.dispatch).toHaveBeenCalledWith(
-        jasmine.objectContaining({
-          type: '[TimeTracking] Add time spent',
-          task,
-          duration: 60000,
-        }),
-      );
-    });
-
-    it('should use provided date', () => {
-      const task = createMockTask('task-1');
-
-      service.addTimeSpent(task, 60000, '2026-01-01');
-
-      expect(store.dispatch).toHaveBeenCalledWith(
-        jasmine.objectContaining({
-          date: '2026-01-01',
-        }),
-      );
-    });
-  });
-
-  describe('addTimeSpentAndSync', () => {
-    it('should dispatch both addTimeSpent and syncTimeSpent', () => {
-      const task = createMockTask('task-1');
-
-      service.addTimeSpentAndSync(task, 60000);
-
-      expect(store.dispatch).toHaveBeenCalledWith(
-        jasmine.objectContaining({
-          type: '[TimeTracking] Add time spent',
-          task,
-          duration: 60000,
-          date: '2026-01-05',
-        }),
-      );
-      expect(store.dispatch).toHaveBeenCalledWith(
-        jasmine.objectContaining({
-          type: '[TimeTracking] Sync time spent',
-          taskId: 'task-1',
-          duration: 60000,
-          date: '2026-01-05',
-        }),
-      );
-    });
-
-    it('should use same date for both dispatches', () => {
-      const task = createMockTask('task-1');
-
-      service.addTimeSpentAndSync(task, 5000);
-
-      const calls = (store.dispatch as jasmine.Spy).calls.allArgs();
-      const addCall = calls.find(
-        ([a]: any) => a.type === '[TimeTracking] Add time spent',
-      );
-      const syncCall = calls.find(
-        ([a]: any) => a.type === '[TimeTracking] Sync time spent',
-      );
-
-      expect(addCall).toBeTruthy();
-      expect(syncCall).toBeTruthy();
-      expect(addCall![0].date).toBe(syncCall![0].date);
-    });
-
-    it('should not dispatch when duration is zero', () => {
-      const task = createMockTask('task-1');
-      (store.dispatch as jasmine.Spy).calls.reset();
-
-      service.addTimeSpentAndSync(task, 0);
-
-      expect(store.dispatch).not.toHaveBeenCalled();
-    });
-
-    it('should not dispatch when duration is negative', () => {
-      const task = createMockTask('task-1');
-      (store.dispatch as jasmine.Spy).calls.reset();
-
-      service.addTimeSpentAndSync(task, -1000);
-
-      expect(store.dispatch).not.toHaveBeenCalled();
-    });
-  });
-
   describe('removeTimeSpent', () => {
-    it('should dispatch removeTimeSpent action', () => {
+    it('should call trimSessionsByAmount on TimeSessionService', () => {
       service.removeTimeSpent('task-1', 30000);
 
-      expect(store.dispatch).toHaveBeenCalledWith(
-        jasmine.objectContaining({
-          type: '[Task] Remove time spent',
-          id: 'task-1',
-          duration: 30000,
-        }),
+      expect(timeSessionService.trimSessionsByAmount).toHaveBeenCalledWith(
+        'task-1',
+        '2026-01-05',
+        30000,
       );
     });
   });
