@@ -148,39 +148,18 @@
 }
 
 .check-done {
-  .check,
   .undo {
     opacity: 0;
-  }
-
-  .undo {
     margin-right: -24px;
-  }
-
-  &:focus,
-  &:hover {
-    mat-icon {
-      animation: var(--transition-duration-m) success-btn-ani linear;
-    }
-
-    .check {
-      opacity: 1;
-    }
   }
 
   &.isDone {
     .check {
-      opacity: 1;
+      opacity: 0;
     }
 
-    &:hover {
-      .check {
-        opacity: 0;
-      }
-
-      .undo {
-        opacity: 1;
-      }
+    .undo {
+      opacity: 1;
     }
   }
 }
