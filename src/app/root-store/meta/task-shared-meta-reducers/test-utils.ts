@@ -11,6 +11,10 @@ import { DEFAULT_TAG } from '../../../features/tag/tag.const';
 import { Action } from '@ngrx/store';
 import { getDbDateStr } from '../../../util/get-db-date-str';
 import { appStateFeatureKey } from '../../app-state/app-state.reducer';
+import {
+  TIME_SESSION_FEATURE_KEY,
+  initialTimeSessionState,
+} from '../../../features/time-session/store/time-session.reducer';
 
 // =============================================================================
 // TEST HELPERS
@@ -78,6 +82,7 @@ export const createBaseState = (): RootState => {
       todayStr: getDbDateStr(),
       startOfNextDayDiffMs: 0,
     },
+    [TIME_SESSION_FEATURE_KEY]: initialTimeSessionState,
   } as Partial<RootState> as RootState;
 };
 

@@ -2,11 +2,6 @@
   display: block;
 }
 
-.table-wrapper {
-  /* override material table wrapper overflow: auto to allow the start and end rows to flow beyond the table border using translate */
-  overflow: visible;
-}
-
 .summary-table {
   width: 100%;
 
@@ -51,10 +46,7 @@
 
   .entry-title {
     mat-icon {
-      font-size: 1.4em;
       width: 1.4em;
-      height: 1.4em;
-      line-height: 1.4em;
       opacity: 0.6;
     }
 
@@ -66,21 +58,6 @@
   tr.start td {
     background-color: var(--bg-darker);
 
-    &:first-child {
-      display: flex;
-      flex-direction: row;
-      padding-left: 0px;
-      align-items: center;
-    }
-
-    div.outset {
-      border-radius: 14px 0 0 14px;
-      width: 14px;
-      height: 36px;
-      transform: translateX(-14px);
-      background-color: var(--bg-darker);
-    }
-
     span.eq {
       display: none;
     }
@@ -88,21 +65,6 @@
 
   tr.end td {
     background-color: var(--bg-darker);
-
-    &:last-child {
-      display: flex;
-      flex-direction: row-reverse;
-      align-items: center;
-      padding-right: 0px;
-    }
-
-    div.outset {
-      border-radius: 0 14px 14px 0;
-      width: 14px;
-      height: 36px;
-      transform: translateX(14px);
-      background-color: var(--bg-darker);
-    }
   }
 
   tr.break td {
