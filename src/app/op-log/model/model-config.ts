@@ -34,7 +34,6 @@ import {
 import { initialTimeTrackingState } from '../../features/time-tracking/store/time-tracking.reducer';
 import { TimeSessionState } from '../../features/time-session/time-session.model';
 import { initialTimeSessionState } from '../../features/time-session/store/time-session.reducer';
-import { appDataValidators } from '../validation/validation-fn';
 import { fixEntityStateConsistency } from '../../util/check-fix-entity-state-consistency';
 import {
   initialPluginMetaDataState,
@@ -83,7 +82,6 @@ export const MODEL_CONFIGS: AllModelConfig = {
   timeSession: {
     defaultData: initialTimeSessionState,
     isMainFileModel: true,
-    validate: appDataValidators.timeSession,
   },
   project: {
     defaultData: initialProjectState,

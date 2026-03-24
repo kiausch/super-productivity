@@ -187,9 +187,15 @@ describe('AddTaskBarComponent', () => {
       shortSyntax$: of({}),
       localization: () => ({ timeLocale: DEFAULT_LOCALE }),
     });
-    mockStore = jasmine.createSpyObj('Store', ['select', 'dispatch', 'pipe']);
+    mockStore = jasmine.createSpyObj('Store', [
+      'select',
+      'dispatch',
+      'pipe',
+      'selectSignal',
+    ]);
     mockStore.pipe.and.returnValue(of([]));
     mockStore.select.and.returnValue(of([]));
+    mockStore.selectSignal.and.returnValue(signal([]));
     mockMatDialog = jasmine.createSpyObj('MatDialog', ['open']);
     mockSnackService = jasmine.createSpyObj('SnackService', ['open']);
     mockAddTaskBarIssueSearchService = jasmine.createSpyObj(

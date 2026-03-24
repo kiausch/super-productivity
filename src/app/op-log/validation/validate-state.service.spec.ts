@@ -9,6 +9,7 @@ import { HydrationStateService } from '../apply/hydration-state.service';
 import { DEFAULT_GLOBAL_CONFIG } from '../../features/config/default-global-config.const';
 import { plannerInitialState } from '../../features/planner/store/planner.reducer';
 import { initialTimeTrackingState } from '../../features/time-tracking/store/time-tracking.reducer';
+import { initialTimeSessionState } from '../../features/time-session/store/time-session.reducer';
 import { initialMetricState } from '../../features/metric/store/metric.reducer';
 import { menuTreeInitialState } from '../../features/menu-tree/store/menu-tree.reducer';
 import {
@@ -40,6 +41,7 @@ describe('ValidateStateService', () => {
     menuTree: menuTreeInitialState,
     globalConfig: DEFAULT_GLOBAL_CONFIG,
     timeTracking: initialTimeTrackingState,
+    timeSession: initialTimeSessionState,
     reminders: [],
     pluginUserData: [],
     pluginMetadata: [],

@@ -105,9 +105,15 @@ describe('AddTaskBarComponent Mentions Integration', () => {
     );
     const matDialogSpy = jasmine.createSpyObj('MatDialog', ['open']);
     const snackServiceSpy = jasmine.createSpyObj('SnackService', ['open']);
-    const storeSpy = jasmine.createSpyObj('Store', ['select', 'dispatch', 'pipe']);
+    const storeSpy = jasmine.createSpyObj('Store', [
+      'select',
+      'dispatch',
+      'pipe',
+      'selectSignal',
+    ]);
     storeSpy.pipe.and.returnValue(of([]));
     storeSpy.select.and.returnValue(of([]));
+    storeSpy.selectSignal.and.returnValue(signal([]));
     const dateTimeFormatServiceSpy = jasmine.createSpyObj(
       'DateTimeFormatService',
       ['currentLocale'],

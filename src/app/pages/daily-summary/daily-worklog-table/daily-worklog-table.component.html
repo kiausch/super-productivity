@@ -17,9 +17,6 @@
         mat-cell
         class="entry-title"
       >
-        @if (entry.type === 'start') {
-          <div class="outset"></div>
-        }
         <div
           [class.isDone]="entry.task?.isDone"
           class="entry-title"
@@ -138,7 +135,6 @@
           }
         }
         @if (entry.type === 'end') {
-          <div class="outset"></div>
           @if (workEndIsManual()) {
             <button
               mat-icon-button
