@@ -199,6 +199,8 @@ export class DailyWorklogTableComponent {
   unaccountedTime = computed(() => {
     return this.workTime() - this.taskTime() - this.breakTime();
   });
+  workStartIsManual = this._timeSessionService.isManualWorkStart(this.dayStr);
+  workEndIsManual = this._timeSessionService.isManualWorkEnd(this.dayStr);
 
   onStartChanged(entry: TableEntry, ev: string): void {
     if (ev === '') {
@@ -308,5 +310,13 @@ export class DailyWorklogTableComponent {
     if (entry.session) {
       this._timeSessionService.deleteSession(entry.session.id);
     }
+  }
+
+  setAutoStartTime(): void {
+    this._timeSessionService.setAutoWorkStart(this.dayStr);
+  }
+
+  setAutoEndTime(): void {
+    this._timeSessionService.setAutoWorkEnd(this.dayStr);
   }
 }

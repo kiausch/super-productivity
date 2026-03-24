@@ -124,8 +124,32 @@
         mat-cell
         class="entry-actions"
       >
+        @if (entry.type === 'start') {
+          @if (workStartIsManual()) {
+            <button
+              mat-icon-button
+              (click)="setAutoStartTime()"
+              class="set-auto-start-time"
+              [title]="'Set Auto Start Time'"
+              aria-label="Set Auto Start Time"
+            >
+              <mat-icon>time_auto</mat-icon>
+            </button>
+          }
+        }
         @if (entry.type === 'end') {
           <div class="outset"></div>
+          @if (workEndIsManual()) {
+            <button
+              mat-icon-button
+              (click)="setAutoEndTime()"
+              class="set-auto-end-time"
+              [title]="'Set Auto End Time'"
+              aria-label="Set Auto End Time"
+            >
+              <mat-icon>time_auto</mat-icon>
+            </button>
+          }
         }
         @if (entry.type === 'task' || entry.type === 'break') {
           <button
