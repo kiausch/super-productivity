@@ -7,7 +7,6 @@ import {
 } from './time-tracking.actions';
 import { loadAllData } from '../../../root-store/meta/load-all-data.action';
 import { AppDataComplete } from '../../../op-log/model/model-config';
-import { TaskCopy } from '../../tasks/task.model';
 import { WorkContextType } from '../../work-context/work-context.model';
 
 describe('TimeTracking Reducer', () => {
@@ -37,37 +36,6 @@ describe('TimeTracking Reducer', () => {
     const action = TimeTrackingActions.updateWholeState({ newState });
     const result = timeTrackingReducer(initialTimeTrackingState, action);
     expect(result).toEqual(newState);
-  });
-
-  describe('addTimeSpent', () => {
-    it('should be a no-op (sessions are the source of truth for work start/end)', () => {
-      const task = { projectId: '1', tagIds: ['2'] } as Partial<TaskCopy> as TaskCopy;
-      const date = '2023-01-01';
-      const action = TimeTrackingActions.addTimeSpent({
-        task,
-        date,
-        duration: 223,
-        isFromTrackingReminder: false,
-      });
-      const result = timeTrackingReducer(initialTimeTrackingState, action);
-      expect(result).toBe(initialTimeTrackingState);
-    });
-
-    it('should not modify pre-existing state', () => {
-      const existingState = {
-        project: { '1': { '2023-01-01': { s: 100, e: 200 } } },
-        tag: { '2': { '2023-01-01': { s: 300, e: 400 } } },
-      };
-      const task = { projectId: '1', tagIds: ['2'] } as Partial<TaskCopy> as TaskCopy;
-      const action = TimeTrackingActions.addTimeSpent({
-        task,
-        date: '2023-01-01',
-        duration: 100,
-        isFromTrackingReminder: false,
-      });
-      const result = timeTrackingReducer(existingState, action);
-      expect(result).toBe(existingState);
-    });
   });
 
   it('should update work context data', () => {

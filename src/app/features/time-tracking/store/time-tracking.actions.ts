@@ -2,7 +2,6 @@
 import { createAction, createActionGroup, props } from '@ngrx/store';
 import { WorkContextType } from '../../work-context/work-context.model';
 import { TimeTrackingState, TTWorkContextData } from '../time-tracking.model';
-import { Task } from '../../tasks/task.model';
 import { PersistentActionMeta } from '../../../op-log/core/persistent-action.interface';
 import { OpType } from '../../../op-log/core/operation.types';
 
@@ -51,12 +50,6 @@ export const syncTimeTracking = createAction(
 export const TimeTrackingActions = createActionGroup({
   source: 'TimeTracking',
   events: {
-    'Add time spent': props<{
-      task: Task;
-      date: string;
-      duration: number;
-      isFromTrackingReminder: boolean;
-    }>(),
     'Update whole State': props<{
       newState: TimeTrackingState;
     }>(),
@@ -67,7 +60,7 @@ export const TimeTrackingActions = createActionGroup({
  * Persistent action for syncing accumulated time spent to other clients.
  * Dispatched every 5 minutes during active tracking and when tracking stops.
  *
- * Local dispatch: Ignored by reducer (state already updated by addTimeSpent ticks)
+ * Local dispatch: Ignored by reducer (state already updated via tickUpdateTaskTime)
  * Remote dispatch: Applied to update timeSpentOnDay and timeTracking state
  */
 export const syncTimeSpent = createAction(

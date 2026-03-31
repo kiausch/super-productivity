@@ -27,10 +27,6 @@ export const timeTrackingReducer = createReducer(
   ),
   on(TimeTrackingActions.updateWholeState, (state, { newState }) => newState),
 
-  // No-op: s/e (work start/end) writing is deprecated.
-  // Sessions are the source of truth now. Action still dispatches for effects.
-  on(TimeTrackingActions.addTimeSpent, (state) => state),
-
   on(updateWorkContextData, (state, { ctx, date, updates }) => {
     const prop = ctx.type === 'TAG' ? 'tag' : 'project';
 
