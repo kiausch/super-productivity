@@ -1,24 +1,25 @@
 /* eslint-disable @typescript-eslint/naming-convention */
 import { TestBed, fakeAsync, tick, flush } from '@angular/core/testing';
+import { MockStore, provideMockStore } from '@ngrx/store/testing';
 import { ProjectMetricsService } from './project-metrics.service';
 import { TaskService } from '../tasks/task.service';
-import { ProjectService } from '../project/project.service';
 import { WorklogService } from '../worklog/worklog.service';
 import { WorkContextService } from '../work-context/work-context.service';
-import { BehaviorSubject, of } from 'rxjs';
+import { BehaviorSubject } from 'rxjs';
 import { WorkContextType } from '../work-context/work-context.model';
 import { createTask } from '../tasks/task.test-helper';
 import { Worklog } from '../worklog/worklog.model';
-import { BreakNr, BreakTime } from '../work-context/work-context.model';
+import { selectAllSessions } from '../time-session/store/time-session.selectors';
+import { BREAK_TASK_ID, TimeSession } from '../time-session/time-session.model';
 
 describe('ProjectMetricsService', () => {
   let service: ProjectMetricsService;
   let taskService: jasmine.SpyObj<TaskService>;
-  let projectService: jasmine.SpyObj<ProjectService>;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let worklogService: jasmine.SpyObj<WorklogService>;
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   let workContextService: jasmine.SpyObj<WorkContextService>;
+  let store: MockStore;
   let activeWorkContextTypeAndId$: BehaviorSubject<{
     activeType: WorkContextType | null;
     activeId: string | null;
@@ -56,6 +57,17 @@ describe('ProjectMetricsService', () => {
     };
   };
 
+  const createBreakSession = (
+    date: string,
+    duration: number,
+    id: string = 'break-' + Math.random(),
+  ): TimeSession => ({
+    id,
+    tid: BREAK_TASK_ID,
+    d: date,
+    t: duration,
+  });
+
   beforeEach(() => {
     activeWorkContextTypeAndId$ = new BehaviorSubject<{
       activeType: WorkContextType | null;
@@ -69,10 +81,6 @@ describe('ProjectMetricsService', () => {
     totalTimeSpent$ = new BehaviorSubject<number>(10000);
 
     const taskServiceSpy = jasmine.createSpyObj('TaskService', ['getAllTasksForProject']);
-    const projectServiceSpy = jasmine.createSpyObj('ProjectService', [
-      'getBreakNrForProject$',
-      'getBreakTimeForProject$',
-    ]);
     const worklogServiceSpy = jasmine.createSpyObj('WorklogService', [], {
       worklog$: worklog$.asObservable(),
       totalTimeSpent$: totalTimeSpent$.asObservable(),
@@ -85,14 +93,14 @@ describe('ProjectMetricsService', () => {
     taskServiceSpy.getAllTasksForProject.and.returnValue(
       Promise.resolve([createTask({ id: '1' })]),
     );
-    projectServiceSpy.getBreakNrForProject$.and.returnValue(of({}));
-    projectServiceSpy.getBreakTimeForProject$.and.returnValue(of({}));
 
     TestBed.configureTestingModule({
       providers: [
         ProjectMetricsService,
+        provideMockStore({
+          selectors: [{ selector: selectAllSessions, value: [] }],
+        }),
         { provide: TaskService, useValue: taskServiceSpy },
-        { provide: ProjectService, useValue: projectServiceSpy },
         { provide: WorklogService, useValue: worklogServiceSpy },
         { provide: WorkContextService, useValue: workContextServiceSpy },
       ],
@@ -100,11 +108,11 @@ describe('ProjectMetricsService', () => {
 
     service = TestBed.inject(ProjectMetricsService);
     taskService = TestBed.inject(TaskService) as jasmine.SpyObj<TaskService>;
-    projectService = TestBed.inject(ProjectService) as jasmine.SpyObj<ProjectService>;
     worklogService = TestBed.inject(WorklogService) as jasmine.SpyObj<WorklogService>;
     workContextService = TestBed.inject(
       WorkContextService,
     ) as jasmine.SpyObj<WorkContextService>;
+    store = TestBed.inject(MockStore);
   });
 
   describe('Signal creation', () => {
@@ -120,12 +128,13 @@ describe('ProjectMetricsService', () => {
   describe('Context switching', () => {
     it('should emit metrics when PROJECT context is active', fakeAsync(() => {
       const tasks = [createTask({ id: '1', isDone: true })];
-      const breakNr: BreakNr = { '2025-01-15': 2 };
-      const breakTime: BreakTime = { '2025-01-15': 600000 };
 
       taskService.getAllTasksForProject.and.returnValue(Promise.resolve(tasks));
-      projectService.getBreakNrForProject$.and.returnValue(of(breakNr));
-      projectService.getBreakTimeForProject$.and.returnValue(of(breakTime));
+      store.overrideSelector(selectAllSessions, [
+        createBreakSession('2025-01-15', 600000, 'b1'),
+        createBreakSession('2025-01-15', 600000, 'b2'),
+      ]);
+      store.refreshState();
 
       // Set PROJECT context
       activeWorkContextTypeAndId$.next({
@@ -142,7 +151,7 @@ describe('ProjectMetricsService', () => {
       expect(metrics?.nrOfAllTasks).toBe(1);
       expect(metrics?.nrOfCompletedTasks).toBe(1);
       expect(metrics?.breakNr).toBe(2);
-      expect(metrics?.breakTime).toBe(600000);
+      expect(metrics?.breakTime).toBe(1200000);
     }));
 
     it('should return EMPTY when TAG context is active', fakeAsync(() => {
@@ -215,14 +224,16 @@ describe('ProjectMetricsService', () => {
         createTask({ id: '1', isDone: true }),
         createTask({ id: '2', isDone: false }),
       ];
-      const breakNr: BreakNr = { '2025-01-15': 3 };
-      const breakTime: BreakTime = { '2025-01-15': 900000 };
       const worklog = createWorklog(15000);
       const totalTimeSpent = 15000;
 
       taskService.getAllTasksForProject.and.returnValue(Promise.resolve(tasks));
-      projectService.getBreakNrForProject$.and.returnValue(of(breakNr));
-      projectService.getBreakTimeForProject$.and.returnValue(of(breakTime));
+      store.overrideSelector(selectAllSessions, [
+        createBreakSession('2025-01-15', 300000, 'b1'),
+        createBreakSession('2025-01-15', 300000, 'b2'),
+        createBreakSession('2025-01-15', 300000, 'b3'),
+      ]);
+      store.refreshState();
       worklog$.next(worklog);
       totalTimeSpent$.next(totalTimeSpent);
 
@@ -244,14 +255,10 @@ describe('ProjectMetricsService', () => {
       expect(metrics?.daysWorked).toBe(1);
     }));
 
-    it('should pass correct parameters to mapSimpleMetrics', fakeAsync(() => {
+    it('should pass correct parameters to getAllTasksForProject', fakeAsync(() => {
       const tasks = [createTask()];
-      const breakNr: BreakNr = { '2025-01-15': 1 };
-      const breakTime: BreakTime = { '2025-01-15': 300000 };
 
       taskService.getAllTasksForProject.and.returnValue(Promise.resolve(tasks));
-      projectService.getBreakNrForProject$.and.returnValue(of(breakNr));
-      projectService.getBreakTimeForProject$.and.returnValue(of(breakTime));
 
       activeWorkContextTypeAndId$.next({
         activeType: WorkContextType.PROJECT,
@@ -263,30 +270,16 @@ describe('ProjectMetricsService', () => {
 
       // Verify getAllTasksForProject was called with correct projectId
       expect(taskService.getAllTasksForProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
-
-      // Verify getBreakNrForProject$ was called with correct projectId
-      expect(projectService.getBreakNrForProject$).toHaveBeenCalledWith(TEST_PROJECT_ID);
-
-      // Verify getBreakTimeForProject$ was called with correct projectId
-      expect(projectService.getBreakTimeForProject$).toHaveBeenCalledWith(
-        TEST_PROJECT_ID,
-      );
     }));
 
-    it('should use project-specific break data', fakeAsync(() => {
-      const breakNr: BreakNr = {
-        '2025-01-14': 1,
-        '2025-01-15': 2,
-        '2025-01-16': 3,
-      };
-      const breakTime: BreakTime = {
-        '2025-01-14': 300000,
-        '2025-01-15': 600000,
-        '2025-01-16': 900000,
-      };
-
-      projectService.getBreakNrForProject$.and.returnValue(of(breakNr));
-      projectService.getBreakTimeForProject$.and.returnValue(of(breakTime));
+    it('should use global break data from sessions', fakeAsync(() => {
+      store.overrideSelector(selectAllSessions, [
+        createBreakSession('2025-01-14', 300000, 'b1'),
+        createBreakSession('2025-01-15', 300000, 'b2'),
+        createBreakSession('2025-01-15', 300000, 'b3'),
+        createBreakSession('2025-01-16', 900000, 'b4'),
+      ]);
+      store.refreshState();
 
       activeWorkContextTypeAndId$.next({
         activeType: WorkContextType.PROJECT,
@@ -297,8 +290,8 @@ describe('ProjectMetricsService', () => {
       flush();
 
       const metrics = service.simpleMetrics();
-      expect(metrics?.breakNr).toBe(6); // Sum of all break numbers
-      expect(metrics?.breakTime).toBe(1800000); // Sum of all break times
+      expect(metrics?.breakNr).toBe(4); // All break sessions regardless of project
+      expect(metrics?.breakTime).toBe(1800000); // 300000 + 300000 + 300000 + 900000
     }));
 
     it('should use project-specific tasks via getAllTasksForProject()', fakeAsync(() => {
@@ -387,9 +380,9 @@ describe('ProjectMetricsService', () => {
       expect(metrics?.nrOfMainTasks).toBe(0);
     }));
 
-    it('should handle project with no breaks', fakeAsync(() => {
-      projectService.getBreakNrForProject$.and.returnValue(of({}));
-      projectService.getBreakTimeForProject$.and.returnValue(of({}));
+    it('should handle no break sessions', fakeAsync(() => {
+      store.overrideSelector(selectAllSessions, []);
+      store.refreshState();
 
       activeWorkContextTypeAndId$.next({
         activeType: WorkContextType.PROJECT,

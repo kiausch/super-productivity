@@ -101,17 +101,10 @@ export class TimeTrackingService {
           const workEnd = calculatedEnd ?? oldData.e;
 
           // Only add entry if there's any data for this date
-          if (
-            workStart !== undefined ||
-            workEnd !== undefined ||
-            oldData.b !== undefined ||
-            oldData.bt !== undefined
-          ) {
+          if (workStart !== undefined || workEnd !== undefined) {
             result[date] = {
               ...(workStart !== undefined && { s: workStart }),
               ...(workEnd !== undefined && { e: workEnd }),
-              ...(oldData.b !== undefined && { b: oldData.b }),
-              ...(oldData.bt !== undefined && { bt: oldData.bt }),
             };
           }
         }

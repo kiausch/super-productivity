@@ -6,11 +6,13 @@ import { filter, map, switchMap, take, withLatestFrom } from 'rxjs/operators';
 import { mapSimpleMetrics } from './metric.util';
 import { TaskService } from '../tasks/task.service';
 import { WorklogService } from '../worklog/worklog.service';
-import { TimeTrackingService } from '../time-tracking/time-tracking.service';
-import { BreakNr, BreakTime, WorkContextType } from '../work-context/work-context.model';
-import { TimeTrackingState } from '../time-tracking/time-tracking.model';
+import { WorkContextType } from '../work-context/work-context.model';
 import { WorkContextService } from '../work-context/work-context.service';
 import { TODAY_TAG } from '../tag/tag.const';
+import { Store } from '@ngrx/store';
+import { selectAllSessions } from '../time-session/store/time-session.selectors';
+import { BREAK_TASK_ID, TimeSession } from '../time-session/time-session.model';
+import { breakSessionsToBreakMaps } from './break-session.util';
 
 @Injectable({
   providedIn: 'root',
@@ -19,7 +21,11 @@ export class AllTasksMetricsService {
   private _taskService = inject(TaskService);
   private _worklogService = inject(WorklogService);
   private _workContextService = inject(WorkContextService);
-  private _timeTrackingService = inject(TimeTrackingService);
+  private _store = inject(Store);
+
+  private _breakSessions$: Observable<TimeSession[]> = this._store
+    .select(selectAllSessions)
+    .pipe(map((sessions) => sessions.filter((s) => s.tid === BREAK_TASK_ID)));
 
   /**
    * Reactive metrics that recompute when context switches to TODAY_TAG.
@@ -34,8 +40,8 @@ export class AllTasksMetricsService {
       filter(([, worklog]) => !!worklog),
       switchMap(() =>
         combineLatest([
-          this._getAllBreakNr$(),
-          this._getAllBreakTime$(),
+          this._breakSessions$.pipe(map((s) => breakSessionsToBreakMaps(s).breakNr)),
+          this._breakSessions$.pipe(map((s) => breakSessionsToBreakMaps(s).breakTime)),
           this._worklogService.worklog$,
           this._worklogService.totalTimeSpent$,
           from(this._taskService.getAllTasksEverywhere()),
@@ -48,57 +54,4 @@ export class AllTasksMetricsService {
     );
 
   simpleMetrics = toSignal(this._simpleMetricsObs$);
-
-  /**
-   * Aggregate break numbers across all projects and tags
-   * Returns a map of date string -> total break count for that date
-   */
-  private _getAllBreakNr$(): Observable<BreakNr> {
-    return this._timeTrackingService.state$.pipe(
-      map((state) => this._aggregateBreaksAcrossContexts(state, 'b')),
-    );
-  }
-
-  /**
-   * Aggregate break times across all projects and tags
-   * Returns a map of date string -> total break time (ms) for that date
-   */
-  private _getAllBreakTime$(): Observable<BreakTime> {
-    return this._timeTrackingService.state$.pipe(
-      map((state) => this._aggregateBreaksAcrossContexts(state, 'bt')),
-    );
-  }
-
-  /**
-   * Aggregates break data (number or time) across all work contexts (projects and tags)
-   * @param state TimeTrackingState containing all time tracking data
-   * @param field 'b' for break number, 'bt' for break time
-   * @returns Aggregated break data by date
-   */
-  private _aggregateBreaksAcrossContexts(
-    state: TimeTrackingState,
-    field: 'b' | 'bt',
-  ): BreakNr | BreakTime {
-    const result: { [key: string]: number } = {};
-
-    // Aggregate from all projects
-    Object.values(state.project).forEach((projectData) => {
-      Object.entries(projectData).forEach(([dateStr, dayData]) => {
-        if (typeof dayData?.[field] === 'number') {
-          result[dateStr] = (result[dateStr] || 0) + dayData[field];
-        }
-      });
-    });
-
-    // Aggregate from all tags
-    Object.values(state.tag).forEach((tagData) => {
-      Object.entries(tagData).forEach(([dateStr, dayData]) => {
-        if (typeof dayData?.[field] === 'number') {
-          result[dateStr] = (result[dateStr] || 0) + dayData[field];
-        }
-      });
-    });
-
-    return result;
-  }
 }
