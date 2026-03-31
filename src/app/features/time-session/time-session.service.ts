@@ -1,5 +1,7 @@
 import { computed, inject, Injectable, Signal } from '@angular/core';
 import { Store } from '@ngrx/store';
+import { Observable } from 'rxjs';
+import { map } from 'rxjs/operators';
 import { selectAllSessions, selectTodaySessions } from './store/time-session.selectors';
 import {
   addTimeSession,
@@ -13,6 +15,8 @@ import {
   BREAK_TASK_ID,
 } from './time-session.model';
 import { DateService } from '../../core/date/date.service';
+import { WorkStartEnd } from '../work-context/work-context.model';
+import { sessionsToWorkStartEndMaps } from './work-start-end-session.util';
 
 @Injectable({
   providedIn: 'root',
@@ -23,6 +27,11 @@ export class TimeSessionService {
 
   allSessions = this._store.selectSignal(selectAllSessions);
   todaySessions = this._store.selectSignal(selectTodaySessions);
+
+  workStartEndMaps$: Observable<{ workStart: WorkStartEnd; workEnd: WorkStartEnd }> =
+    this._store
+      .select(selectAllSessions)
+      .pipe(map((sessions) => sessionsToWorkStartEndMaps(sessions)));
 
   update(session: TimeSession, changes: Partial<TimeSession>): void {
     this._store.dispatch(

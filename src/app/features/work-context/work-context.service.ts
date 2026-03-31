@@ -62,7 +62,6 @@ import { isShallowEqual } from '../../util/is-shallow-equal';
 import { distinctUntilChangedObject } from '../../util/distinct-until-changed-object';
 import { DateService } from 'src/app/core/date/date.service';
 import { getTimeSpentForDay } from './get-time-spent-for-day.util';
-import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { TimeSessionService } from '../time-session/time-session.service';
 import { TaskArchiveService } from '../archive/task-archive.service';
 import { INBOX_PROJECT } from '../project/project.const';
@@ -82,7 +81,6 @@ export class WorkContextService {
   private _dateService = inject(DateService);
   private _router = inject(Router);
   private _translateService = inject(TranslateService);
-  private _timeTrackingService = inject(TimeTrackingService);
   private _timeSessionService = inject(TimeSessionService);
   private _taskArchiveService = inject(TaskArchiveService);
   private _pendingNavigationUrl: string | null = null;
@@ -148,11 +146,6 @@ export class WorkContextService {
 
   activeWorkContext$: Observable<WorkContext> = this._afterDataLoadedOnce$.pipe(
     switchMap(() => this._store$.select(selectActiveWorkContext)),
-    shareReplay(1),
-  );
-
-  activeWorkContextTTData$ = this.activeWorkContext$.pipe(
-    switchMap((ac) => this._timeTrackingService.getWorkStartEndForWorkContext$(ac)),
     shareReplay(1),
   );
 

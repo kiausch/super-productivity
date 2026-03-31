@@ -1,13 +1,11 @@
 import { inject, Injectable } from '@angular/core';
 import { combineLatest, Observable, Subject } from 'rxjs';
-import { TimeTrackingState, TTDateMap, TTWorkContextData } from './time-tracking.model';
+import { TimeTrackingState } from './time-tracking.model';
 import { first, map, shareReplay, startWith, switchMap } from 'rxjs/operators';
 import { mergeTimeTrackingStates } from './merge-time-tracking-states';
 import { Store } from '@ngrx/store';
 import { selectTimeTrackingState } from './store/time-tracking.selectors';
 import { ArchiveDbAdapter } from '../../core/persistence/archive-db-adapter.service';
-import { WorkContextType, WorkStartEnd } from '../work-context/work-context.model';
-import { toLegacyWorkStartEndMaps } from './to-legacy-work-start-end-maps';
 import { TimeTrackingActions } from './store/time-tracking.actions';
 import { Log } from '../../core/log';
 import { initialTimeTrackingState } from './store/time-tracking.reducer';
@@ -51,68 +49,6 @@ export class TimeTrackingService {
     ),
     shareReplay(1),
   );
-
-  getWorkStartEndForWorkContext$(ctx: {
-    id: string;
-    type: WorkContextType;
-  }): Observable<TTDateMap<TTWorkContextData>> {
-    const { id, type } = ctx;
-    return combineLatest([
-      this.state$,
-      this._store.select((state: any) => state.timeSession?.sessions || []),
-    ]).pipe(
-      map(([timeTrackingState, allSessions]) => {
-        // Get old storage data for this context
-        const oldStorageMap: TTDateMap<TTWorkContextData> =
-          type === 'PROJECT'
-            ? timeTrackingState.project[id] || {}
-            : type === 'TAG'
-              ? timeTrackingState.tag[id] || {}
-              : ({} as TTDateMap<TTWorkContextData>);
-
-        // Get all unique dates from old storage and sessions
-        const allDates = new Set([
-          ...Object.keys(oldStorageMap),
-          ...allSessions.map((s: any) => s.d),
-        ]);
-
-        // Build result map with fallback for each date
-        const result: TTDateMap<TTWorkContextData> = {};
-        for (const date of allDates) {
-          const oldData = oldStorageMap[date] || {};
-
-          // Calculate work start/end from all sessions (includes manual markers)
-          const sessionsForDate = allSessions.filter(
-            (s: any) => s.d === date && s.s !== undefined,
-          );
-
-          const calculatedStart =
-            sessionsForDate.length > 0
-              ? Math.min(...sessionsForDate.map((s: any) => s.s))
-              : undefined;
-
-          const calculatedEnd =
-            sessionsForDate.length > 0
-              ? Math.max(...sessionsForDate.map((s: any) => s.s + s.t))
-              : undefined;
-
-          // Use calculated values, fall back to old storage
-          const workStart = calculatedStart ?? oldData.s;
-          const workEnd = calculatedEnd ?? oldData.e;
-
-          // Only add entry if there's any data for this date
-          if (workStart !== undefined || workEnd !== undefined) {
-            result[date] = {
-              ...(workStart !== undefined && { s: workStart }),
-              ...(workEnd !== undefined && { e: workEnd }),
-            };
-          }
-        }
-
-        return result;
-      }),
-    );
-  }
 
   async cleanupDataEverywhereForProject(projectId: string): Promise<void> {
     const current = await this.current$.pipe(first()).toPromise();
@@ -200,23 +136,5 @@ export class TimeTrackingService {
       await this._archiveDbAdapter.saveArchiveOld(archiveOld);
       this._archiveOldUpdateTrigger$.next(undefined);
     }
-  }
-
-  async getWorkStartEndForWorkContext(ctx: {
-    id: string;
-    type: WorkContextType;
-  }): Promise<TTDateMap<TTWorkContextData>> {
-    return this.getWorkStartEndForWorkContext$(ctx).pipe(first()).toPromise();
-  }
-
-  async getLegacyWorkStartEndForWorkContext(ctx: {
-    id: string;
-    type: WorkContextType;
-  }): Promise<{
-    workStart: WorkStartEnd;
-    workEnd: WorkStartEnd;
-  }> {
-    const d = await this.getWorkStartEndForWorkContext(ctx);
-    return toLegacyWorkStartEndMaps(d);
   }
 }

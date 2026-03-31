@@ -9,7 +9,6 @@ import { TranslateModule } from '@ngx-translate/core';
 import { TagService } from '../tag/tag.service';
 import { GlobalTrackingIntervalService } from '../../core/global-tracking-interval/global-tracking-interval.service';
 import { DateService } from '../../core/date/date.service';
-import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { TaskArchiveService } from '../archive/task-archive.service';
 import { TODAY_TAG } from '../tag/tag.const';
 import { WorkContextType } from './work-context.model';
@@ -18,7 +17,6 @@ describe('WorkContextService - undoneTasks$ filtering', () => {
   let tagServiceMock: jasmine.SpyObj<TagService>;
   let globalTrackingIntervalServiceMock: jasmine.SpyObj<GlobalTrackingIntervalService>;
   let dateServiceMock: jasmine.SpyObj<DateService>;
-  let timeTrackingServiceMock: jasmine.SpyObj<TimeTrackingService>;
   let taskArchiveServiceMock: jasmine.SpyObj<TaskArchiveService>;
   let service: WorkContextService;
 
@@ -70,15 +68,11 @@ describe('WorkContextService - undoneTasks$ filtering', () => {
       },
     );
     dateServiceMock = jasmine.createSpyObj('DateService', ['todayStr']);
-    timeTrackingServiceMock = jasmine.createSpyObj('TimeTrackingService', [
-      'getWorkStartEndForWorkContext$',
-    ]);
     taskArchiveServiceMock = jasmine.createSpyObj('TaskArchiveService', ['loadYoung']);
 
     // Configure mock return values
     tagServiceMock.getTagById$.and.returnValue(of(TODAY_TAG));
     dateServiceMock.todayStr.and.returnValue('2023-06-13');
-    timeTrackingServiceMock.getWorkStartEndForWorkContext$.and.returnValue(of({}));
     taskArchiveServiceMock.loadYoung.and.returnValue(
       Promise.resolve({ ids: [], entities: {} }),
     );
@@ -123,7 +117,6 @@ describe('WorkContextService - undoneTasks$ filtering', () => {
           useValue: globalTrackingIntervalServiceMock,
         },
         { provide: DateService, useValue: dateServiceMock },
-        { provide: TimeTrackingService, useValue: timeTrackingServiceMock },
         { provide: TaskArchiveService, useValue: taskArchiveServiceMock },
         WorkContextService,
       ],
