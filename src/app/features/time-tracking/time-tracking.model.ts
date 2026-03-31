@@ -24,7 +24,9 @@ export type TTDateMap<T> = Omit<
  * bt: break time (deprecated — use TimeSession with BREAK_TASK_ID instead)
  */
 export interface TTWorkContextData {
+  /** @deprecated Kept for backward compatibility. Use TimeSession work start/end instead. */
   s?: number;
+  /** @deprecated Kept for backward compatibility. Use TimeSession work start/end instead. */
   e?: number;
   /** @deprecated Kept for backward compatibility. Use TimeSession with BREAK_TASK_ID instead. */
   b?: number;

@@ -30,7 +30,7 @@ import { WorklogTask } from '../tasks/task.model';
 import { mapArchiveToWorklogWeeks } from './util/map-archive-to-worklog-weeks';
 import { DateAdapter } from '@angular/material/core';
 import { DataInitStateService } from '../../core/data-init/data-init-state.service';
-import { TimeTrackingService } from '../time-tracking/time-tracking.service';
+import { TimeSessionService } from '../time-session/time-session.service';
 import { TaskArchiveService } from '../archive/task-archive.service';
 import { getDbDateStr } from '../../util/get-db-date-str';
 import { DateTimeFormatService } from 'src/app/core/date-time-format/date-time-format.service';
@@ -41,7 +41,7 @@ export class WorklogService {
   private readonly _workContextService = inject(WorkContextService);
   private readonly _dataInitStateService = inject(DataInitStateService);
   private readonly _taskService = inject(TaskService);
-  private readonly _timeTrackingService = inject(TimeTrackingService);
+  private readonly _timeSessionService = inject(TimeSessionService);
   private readonly _router = inject(Router);
   private readonly _dateTimeFormatService = inject(DateTimeFormatService);
   private _dateAdapter = inject(DateAdapter);
@@ -236,8 +236,9 @@ export class WorklogService {
     const { completeStateForWorkContext, nonArchiveTaskIds } =
       getCompleteStateForWorkContext(workContext, taskState, archive);
 
-    const workStartEndForWorkContext =
-      await this._timeTrackingService.getLegacyWorkStartEndForWorkContext(workContext);
+    const workStartEndForWorkContext = await this._timeSessionService.workStartEndMaps$
+      .pipe(first())
+      .toPromise();
 
     if (completeStateForWorkContext) {
       const { worklog, totalTimeSpent } = mapArchiveToWorklog(
@@ -269,8 +270,9 @@ export class WorklogService {
     const { completeStateForWorkContext, nonArchiveTaskIds } =
       getCompleteStateForWorkContext(workContext, taskState, archive);
 
-    const workStartEndForWorkContext =
-      await this._timeTrackingService.getLegacyWorkStartEndForWorkContext(workContext);
+    const workStartEndForWorkContext = await this._timeSessionService.workStartEndMaps$
+      .pipe(first())
+      .toPromise();
 
     if (completeStateForWorkContext) {
       return mapArchiveToWorklogWeeks(

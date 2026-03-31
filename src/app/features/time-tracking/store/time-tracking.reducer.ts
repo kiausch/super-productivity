@@ -7,8 +7,6 @@ import { createFeature, createReducer, on } from '@ngrx/store';
 import { TimeTrackingState } from '../time-tracking.model';
 import { loadAllData } from '../../../root-store/meta/load-all-data.action';
 import { AppDataComplete } from '../../../op-log/model/model-config';
-import { roundTsToMinutes } from '../../../util/round-ts-to-minutes';
-import { TODAY_TAG } from '../../tag/tag.const';
 
 export const TIME_TRACKING_FEATURE_KEY = 'timeTracking' as const;
 
@@ -29,44 +27,9 @@ export const timeTrackingReducer = createReducer(
   ),
   on(TimeTrackingActions.updateWholeState, (state, { newState }) => newState),
 
-  on(TimeTrackingActions.addTimeSpent, (state, { task, date }) => {
-    const isUpdateProject = !!task.projectId;
-
-    return {
-      ...state,
-      ...(isUpdateProject
-        ? {
-            project: {
-              ...state.project,
-              [task.projectId]: {
-                ...state.project[task.projectId],
-                [date]: {
-                  ...state.project[task.projectId]?.[date],
-                  e: roundTsToMinutes(Date.now()),
-                  s: roundTsToMinutes(
-                    state.project[task.projectId]?.[date]?.s || Date.now(),
-                  ),
-                },
-              },
-            },
-          }
-        : {}),
-      tag: {
-        ...state.tag,
-        ...([TODAY_TAG.id, ...(task.tagIds || [])] as string[]).reduce((acc, tagId) => {
-          acc[tagId] = {
-            ...state.tag[tagId],
-            [date]: {
-              ...state.tag[tagId]?.[date],
-              e: roundTsToMinutes(Date.now()),
-              s: roundTsToMinutes(state.tag[tagId]?.[date]?.s || Date.now()),
-            },
-          };
-          return acc;
-        }, {}),
-      },
-    };
-  }),
+  // No-op: s/e (work start/end) writing is deprecated.
+  // Sessions are the source of truth now. Action still dispatches for effects.
+  on(TimeTrackingActions.addTimeSpent, (state) => state),
 
   on(updateWorkContextData, (state, { ctx, date, updates }) => {
     const prop = ctx.type === 'TAG' ? 'tag' : 'project';

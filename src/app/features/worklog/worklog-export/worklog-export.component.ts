@@ -8,7 +8,7 @@ import {
   OnInit,
   output,
 } from '@angular/core';
-import { combineLatest, from, Subscription } from 'rxjs';
+import { combineLatest, Subscription } from 'rxjs';
 import { getDbDateStr } from '../../../util/get-db-date-str';
 import { SnackService } from '../../../core/snack/snack.service';
 import { WorklogService } from '../worklog.service';
@@ -18,7 +18,7 @@ import {
   WorklogGrouping,
 } from '../worklog.model';
 import { T } from '../../../t.const';
-import { distinctUntilChanged, switchMap } from 'rxjs/operators';
+import { distinctUntilChanged } from 'rxjs/operators';
 import { distinctUntilChangedObject } from '../../../util/distinct-until-changed-object';
 import { WorkContextAdvancedCfg } from '../../work-context/work-context.model';
 import { WORKLOG_EXPORT_DEFAULTS } from '../../work-context/work-context.const';
@@ -41,7 +41,7 @@ import { MatFormField } from '@angular/material/form-field';
 import { MatInput } from '@angular/material/input';
 import { SimpleDownloadDirective } from '../../../ui/simple-download/simple-download.directive';
 import { TranslatePipe } from '@ngx-translate/core';
-import { TimeTrackingService } from '../../time-tracking/time-tracking.service';
+import { TimeSessionService } from '../../time-session/time-session.service';
 
 @Component({
   selector: 'worklog-export',
@@ -78,7 +78,7 @@ export class WorklogExportComponent implements OnInit, OnDestroy {
   private _changeDetectorRef = inject(ChangeDetectorRef);
   private _projectService = inject(ProjectService);
   private _tagService = inject(TagService);
-  private _timeTrackingService = inject(TimeTrackingService);
+  private _timeSessionService = inject(TimeSessionService);
 
   readonly rangeStart = input<Date>();
   readonly rangeEnd = input<Date>();
@@ -178,18 +178,14 @@ export class WorklogExportComponent implements OnInit, OnDestroy {
         ),
         this._projectService.list$,
         this._tagService.tags$,
-        this._workContextService.activeWorkContext$.pipe(
-          switchMap((ac) =>
-            from(this._timeTrackingService.getLegacyWorkStartEndForWorkContext(ac)),
-          ),
-        ),
+        this._timeSessionService.workStartEndMaps$,
       ])
         .pipe()
-        .subscribe(([tasks, projects, tags, activeContextTimeTracking]) => {
+        .subscribe(([tasks, projects, tags, { workStart, workEnd }]) => {
           if (tasks) {
             const workTimes = {
-              start: activeContextTimeTracking.workStart,
-              end: activeContextTimeTracking.workEnd,
+              start: workStart,
+              end: workEnd,
             };
             const data = { tasks, projects, tags, workTimes };
             const rows = createRows(data, this.options.groupBy);
