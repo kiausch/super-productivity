@@ -1,17 +1,17 @@
 /* eslint-disable @typescript-eslint/naming-convention */
 import { TestBed, fakeAsync, tick, flush } from '@angular/core/testing';
-import { provideMockStore } from '@ngrx/store/testing';
+import { MockStore, provideMockStore } from '@ngrx/store/testing';
 import { AllTasksMetricsService } from './all-tasks-metrics.service';
 import { TaskService } from '../tasks/task.service';
 import { WorklogService } from '../worklog/worklog.service';
 import { WorkContextService } from '../work-context/work-context.service';
-import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { BehaviorSubject } from 'rxjs';
 import { createTask } from '../tasks/task.test-helper';
 import { Worklog } from '../worklog/worklog.model';
-import { TimeTrackingState } from '../time-tracking/time-tracking.model';
 import { WorkContext, WorkContextType } from '../work-context/work-context.model';
 import { TODAY_TAG } from '../tag/tag.const';
+import { selectAllSessions } from '../time-session/store/time-session.selectors';
+import { BREAK_TASK_ID, TimeSession } from '../time-session/time-session.model';
 
 describe('AllTasksMetricsService', () => {
   let service: AllTasksMetricsService;
@@ -19,7 +19,7 @@ describe('AllTasksMetricsService', () => {
   let activeWorkContext$: BehaviorSubject<WorkContext | null>;
   let worklog$: BehaviorSubject<Worklog>;
   let totalTimeSpent$: BehaviorSubject<number>;
-  let timeTrackingState$: BehaviorSubject<TimeTrackingState>;
+  let store: MockStore;
 
   const createMockWorkContext = (
     id: string,
@@ -66,23 +66,21 @@ describe('AllTasksMetricsService', () => {
     };
   };
 
-  const createTimeTrackingState = (
-    overrides: Partial<TimeTrackingState> = {},
-  ): TimeTrackingState => {
-    return {
-      project: {},
-      tag: {},
-      ...overrides,
-    };
-  };
+  const createBreakSession = (
+    date: string,
+    duration: number,
+    id: string = 'break-' + Math.random(),
+  ): TimeSession => ({
+    id,
+    tid: BREAK_TASK_ID,
+    d: date,
+    t: duration,
+  });
 
   beforeEach(() => {
     activeWorkContext$ = new BehaviorSubject<WorkContext | null>(null);
     worklog$ = new BehaviorSubject<Worklog>(createWorklog(10000));
     totalTimeSpent$ = new BehaviorSubject<number>(10000);
-    timeTrackingState$ = new BehaviorSubject<TimeTrackingState>(
-      createTimeTrackingState(),
-    );
 
     const taskServiceSpy = jasmine.createSpyObj('TaskService', ['getAllTasksEverywhere']);
     const worklogServiceSpy = jasmine.createSpyObj('WorklogService', [], {
@@ -91,9 +89,6 @@ describe('AllTasksMetricsService', () => {
     });
     const workContextServiceSpy = jasmine.createSpyObj('WorkContextService', [], {
       activeWorkContext$: activeWorkContext$.asObservable(),
-    });
-    const timeTrackingServiceSpy = jasmine.createSpyObj('TimeTrackingService', [], {
-      state$: timeTrackingState$.asObservable(),
     });
 
     // Default return values
@@ -104,16 +99,18 @@ describe('AllTasksMetricsService', () => {
     TestBed.configureTestingModule({
       providers: [
         AllTasksMetricsService,
-        provideMockStore(),
+        provideMockStore({
+          selectors: [{ selector: selectAllSessions, value: [] }],
+        }),
         { provide: TaskService, useValue: taskServiceSpy },
         { provide: WorklogService, useValue: worklogServiceSpy },
         { provide: WorkContextService, useValue: workContextServiceSpy },
-        { provide: TimeTrackingService, useValue: timeTrackingServiceSpy },
       ],
     });
 
     service = TestBed.inject(AllTasksMetricsService);
     taskService = TestBed.inject(TaskService) as jasmine.SpyObj<TaskService>;
+    store = TestBed.inject(MockStore);
   });
 
   describe('Signal creation', () => {
@@ -165,21 +162,15 @@ describe('AllTasksMetricsService', () => {
     }));
   });
 
-  describe('Break aggregation across all contexts', () => {
-    it('should aggregate break numbers across all projects', fakeAsync(() => {
-      const state = createTimeTrackingState({
-        project: {
-          'project-1': {
-            '2025-01-15': { b: 2, bt: 600000 },
-            '2025-01-16': { b: 1, bt: 300000 },
-          },
-          'project-2': {
-            '2025-01-15': { b: 3, bt: 900000 },
-          },
-        },
-      });
+  describe('Break aggregation from sessions', () => {
+    it('should aggregate break counts from sessions', fakeAsync(() => {
+      store.overrideSelector(selectAllSessions, [
+        createBreakSession('2025-01-15', 300000, 'b1'),
+        createBreakSession('2025-01-15', 300000, 'b2'),
+        createBreakSession('2025-01-16', 600000, 'b3'),
+      ]);
+      store.refreshState();
 
-      timeTrackingState$.next(state);
       activeWorkContext$.next(
         createMockWorkContext(TODAY_TAG.id, WorkContextType.TAG, 'Today'),
       );
@@ -189,25 +180,17 @@ describe('AllTasksMetricsService', () => {
 
       const metrics = service.simpleMetrics();
       expect(metrics).toBeDefined();
-      // 2025-01-15: 2 + 3 = 5 breaks
-      // 2025-01-16: 1 break
-      // Total: 6 breaks
-      expect(metrics?.breakNr).toBe(6);
+      // 2025-01-15: 2 breaks, 2025-01-16: 1 break => total 3
+      expect(metrics?.breakNr).toBe(3);
     }));
 
-    it('should aggregate break times across all projects', fakeAsync(() => {
-      const state = createTimeTrackingState({
-        project: {
-          'project-1': {
-            '2025-01-15': { b: 2, bt: 600000 },
-          },
-          'project-2': {
-            '2025-01-15': { b: 1, bt: 300000 },
-          },
-        },
-      });
+    it('should aggregate break times from sessions', fakeAsync(() => {
+      store.overrideSelector(selectAllSessions, [
+        createBreakSession('2025-01-15', 600000, 'b1'),
+        createBreakSession('2025-01-15', 300000, 'b2'),
+      ]);
+      store.refreshState();
 
-      timeTrackingState$.next(state);
       activeWorkContext$.next(
         createMockWorkContext(TODAY_TAG.id, WorkContextType.TAG, 'Today'),
       );
@@ -219,19 +202,13 @@ describe('AllTasksMetricsService', () => {
       expect(metrics?.breakTime).toBe(900000); // 600000 + 300000
     }));
 
-    it('should aggregate breaks across all tags', fakeAsync(() => {
-      const state = createTimeTrackingState({
-        tag: {
-          'tag-1': {
-            '2025-01-15': { b: 1, bt: 300000 },
-          },
-          'tag-2': {
-            '2025-01-15': { b: 2, bt: 600000 },
-          },
-        },
-      });
+    it('should ignore non-break sessions', fakeAsync(() => {
+      store.overrideSelector(selectAllSessions, [
+        createBreakSession('2025-01-15', 600000, 'b1'),
+        { id: 'task-session', tid: 'task-1', d: '2025-01-15', t: 1200000 },
+      ]);
+      store.refreshState();
 
-      timeTrackingState$.next(state);
       activeWorkContext$.next(
         createMockWorkContext(TODAY_TAG.id, WorkContextType.TAG, 'Today'),
       );
@@ -240,44 +217,14 @@ describe('AllTasksMetricsService', () => {
       flush();
 
       const metrics = service.simpleMetrics();
-      expect(metrics?.breakNr).toBe(3); // 1 + 2
-      expect(metrics?.breakTime).toBe(900000); // 300000 + 600000
+      expect(metrics?.breakNr).toBe(1);
+      expect(metrics?.breakTime).toBe(600000);
     }));
 
-    it('should aggregate breaks across both projects and tags', fakeAsync(() => {
-      const state = createTimeTrackingState({
-        project: {
-          'project-1': {
-            '2025-01-15': { b: 2, bt: 600000 },
-          },
-        },
-        tag: {
-          'tag-1': {
-            '2025-01-15': { b: 1, bt: 300000 },
-          },
-        },
-      });
+    it('should handle empty sessions', fakeAsync(() => {
+      store.overrideSelector(selectAllSessions, []);
+      store.refreshState();
 
-      timeTrackingState$.next(state);
-      activeWorkContext$.next(
-        createMockWorkContext(TODAY_TAG.id, WorkContextType.TAG, 'Today'),
-      );
-
-      tick(200);
-      flush();
-
-      const metrics = service.simpleMetrics();
-      expect(metrics?.breakNr).toBe(3); // 2 + 1
-      expect(metrics?.breakTime).toBe(900000); // 600000 + 300000
-    }));
-
-    it('should handle empty time tracking state', fakeAsync(() => {
-      const state = createTimeTrackingState({
-        project: {},
-        tag: {},
-      });
-
-      timeTrackingState$.next(state);
       activeWorkContext$.next(
         createMockWorkContext(TODAY_TAG.id, WorkContextType.TAG, 'Today'),
       );
@@ -290,22 +237,15 @@ describe('AllTasksMetricsService', () => {
       expect(metrics?.breakTime).toBe(0);
     }));
 
-    it('should not double-count breaks from same date across contexts', fakeAsync(() => {
-      // Different contexts on same date should be summed (not double-counted)
-      const state = createTimeTrackingState({
-        project: {
-          'project-1': {
-            '2025-01-15': { b: 2, bt: 600000 },
-          },
-        },
-        tag: {
-          'tag-1': {
-            '2025-01-15': { b: 1, bt: 300000 },
-          },
-        },
-      });
+    it('should aggregate breaks across multiple dates', fakeAsync(() => {
+      store.overrideSelector(selectAllSessions, [
+        createBreakSession('2025-01-15', 300000, 'b1'),
+        createBreakSession('2025-01-15', 300000, 'b2'),
+        createBreakSession('2025-01-16', 600000, 'b3'),
+        createBreakSession('2025-01-17', 150000, 'b4'),
+      ]);
+      store.refreshState();
 
-      timeTrackingState$.next(state);
       activeWorkContext$.next(
         createMockWorkContext(TODAY_TAG.id, WorkContextType.TAG, 'Today'),
       );
@@ -314,9 +254,8 @@ describe('AllTasksMetricsService', () => {
       flush();
 
       const metrics = service.simpleMetrics();
-      // Projects and tags are separate contexts, so they should be summed
-      expect(metrics?.breakNr).toBe(3); // 2 + 1
-      expect(metrics?.breakTime).toBe(900000); // 600000 + 300000
+      expect(metrics?.breakNr).toBe(4);
+      expect(metrics?.breakTime).toBe(1350000); // 300000+300000+600000+150000
     }));
   });
 

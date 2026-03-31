@@ -5,13 +5,7 @@ import { select, Store } from '@ngrx/store';
 import { nanoid } from 'nanoid';
 import { ofType } from '@ngrx/effects';
 import { map, shareReplay, switchMap, take } from 'rxjs/operators';
-import {
-  BreakNr,
-  BreakNrCopy,
-  BreakTime,
-  BreakTimeCopy,
-  WorkContextType,
-} from '../work-context/work-context.model';
+import { WorkContextType } from '../work-context/work-context.model';
 import { MatDialog } from '@angular/material/dialog';
 import { TaskService } from '../tasks/task.service';
 import { addSubTask } from '../tasks/store/task.actions';
@@ -37,7 +31,6 @@ import {
 } from './store/project.selectors';
 import { selectTaskFeatureState } from '../tasks/store/task.selectors';
 import { getTaskById } from '../tasks/store/task.reducer.util';
-import { TimeTrackingService } from '../time-tracking/time-tracking.service';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { TranslateService } from '@ngx-translate/core';
 import { T } from 'src/app/t.const';
@@ -55,7 +48,6 @@ export class ProjectService {
   private readonly _workContextService = inject(WorkContextService);
   private readonly _store$ = inject<Store<any>>(Store);
   private readonly _actions$ = inject(LOCAL_ACTIONS);
-  private readonly _timeTrackingService = inject(TimeTrackingService);
   private readonly _taskService = inject(TaskService);
   private readonly _translate = inject(TranslateService);
   private readonly _matDialog = inject(MatDialog);
@@ -97,42 +89,6 @@ export class ProjectService {
   getProjectsWithoutIdSorted$(projectId: string | null): Observable<Project[]> {
     return this.getProjectsWithoutId$(projectId).pipe(
       map((projects) => sortByTitle(projects)),
-    );
-  }
-
-  getBreakNrForProject$(projectId: string): Observable<BreakNr> {
-    return this._timeTrackingService.state$.pipe(
-      map((current) => {
-        const dataForProject = current.project[projectId];
-        const breakNr: BreakNrCopy = {};
-        if (dataForProject) {
-          Object.keys(dataForProject).forEach((dateStr) => {
-            const dateData = dataForProject[dateStr];
-            if (typeof dateData?.b === 'number') {
-              breakNr[dateStr] = dateData.b;
-            }
-          });
-        }
-        return breakNr;
-      }),
-    );
-  }
-
-  getBreakTimeForProject$(projectId: string): Observable<BreakTime> {
-    return this._timeTrackingService.state$.pipe(
-      map((current) => {
-        const dataForProject = current.project[projectId];
-        const breakTime: BreakTimeCopy = {};
-        if (dataForProject) {
-          Object.keys(dataForProject).forEach((dateStr) => {
-            const dateData = dataForProject[dateStr];
-            if (typeof dateData?.bt === 'number') {
-              breakTime[dateStr] = dateData.bt;
-            }
-          });
-        }
-        return breakTime;
-      }),
     );
   }
 

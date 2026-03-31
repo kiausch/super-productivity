@@ -20,13 +20,15 @@ export type TTDateMap<T> = Omit<
  * Uses shortened property names to reduce storage size
  * s: start time
  * e: end time
- * b: break number
- * bt: break time
+ * b: break number (deprecated — use TimeSession with BREAK_TASK_ID instead)
+ * bt: break time (deprecated — use TimeSession with BREAK_TASK_ID instead)
  */
 export interface TTWorkContextData {
   s?: number;
   e?: number;
+  /** @deprecated Kept for backward compatibility. Use TimeSession with BREAK_TASK_ID instead. */
   b?: number;
+  /** @deprecated Kept for backward compatibility. Use TimeSession with BREAK_TASK_ID instead. */
   bt?: number;
 }
 
