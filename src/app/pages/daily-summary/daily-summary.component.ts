@@ -4,6 +4,7 @@ import {
   ChangeDetectionStrategy,
   Component,
   computed,
+  effect,
   inject,
   linkedSignal,
   OnDestroy,
@@ -11,6 +12,7 @@ import {
   signal,
   Signal,
 } from '@angular/core';
+import { FormsModule } from '@angular/forms';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { MatAnchor, MatButton, MatIconButton } from '@angular/material/button';
 import { MatDialog } from '@angular/material/dialog';
@@ -18,6 +20,7 @@ import { MatIcon } from '@angular/material/icon';
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
 import { MatTab, MatTabGroup } from '@angular/material/tabs';
 import { MatTooltip } from '@angular/material/tooltip';
+import { MatButtonToggleModule } from '@angular/material/button-toggle';
 import { ActivatedRoute, Router } from '@angular/router';
 
 import { combineLatest, from, merge, Observable, Subject } from 'rxjs';
@@ -44,6 +47,7 @@ import { IS_ELECTRON } from '../../app.constants';
 import { ConfettiService } from '../../core/confetti/confetti.service';
 import { Log } from '../../core/log';
 import { SnackService } from '../../core/snack/snack.service';
+import { LS } from '../../core/persistence/storage-keys.const';
 import { BeforeFinishDayService } from '../../features/before-finish-day/before-finish-day.service';
 import { GlobalConfigService } from '../../features/config/global-config.service';
 import { EvaluationSheetComponent } from '../../features/metric/evaluation-sheet/evaluation-sheet.component';
@@ -68,6 +72,7 @@ import { InlineInputComponent } from '../../ui/inline-input/inline-input.compone
 import { InlineMarkdownComponent } from '../../ui/inline-markdown/inline-markdown.component';
 import { MomentFormatPipe } from '../../ui/pipes/moment-format.pipe';
 import { getPluralKey } from '../../util/get-plural-key';
+import { lsGetJSON, lsSetJSON } from '../../util/ls-util';
 import { shareReplayUntil } from '../../util/share-replay-until';
 import { unToggleCheckboxesInMarkdownTxt } from '../../util/untoggle-checkboxes-in-markdown-txt';
 import { PlanTasksTomorrowComponent } from './plan-tasks-tomorrow/plan-tasks-tomorrow.component';
@@ -96,6 +101,8 @@ import { BREAK_TASK_ID } from '../../features/time-session/time-session.model';
     PlanTasksTomorrowComponent,
     MatButton,
     MatTooltip,
+    MatButtonToggleModule,
+    FormsModule,
     AsyncPipe,
     MomentFormatPipe,
     MsToClockStringPipe,
@@ -264,6 +271,13 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
   cfg = toSignal(this.cfg$);
   dailySummaryNoteTxt = linkedSignal(() => this.cfg()?.dailySummaryNote?.txt);
 
+  worklogViewMode = signal<'worklog' | 'project' | 'tag'>(
+    lsGetJSON<'worklog' | 'project' | 'tag'>(
+      LS.DAILY_SUMMARY_WORKLOG_VIEW_MODE,
+      'worklog',
+    ),
+  );
+
   private _startCelebrationTimeout?: number;
   private _celebrationIntervalId?: number;
 
@@ -283,6 +297,10 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
         unToggleCheckboxesInMarkdownTxt(cfg.dailySummaryNote.txt),
       );
     }
+
+    effect(() => {
+      lsSetJSON(LS.DAILY_SUMMARY_WORKLOG_VIEW_MODE, this.worklogViewMode());
+    });
   }
 
   ngOnInit(): void {

@@ -145,29 +145,48 @@
   >
     <mat-tab [label]="'1. ' + (T.PDS.REVIEW_TASKS | translate)">
       <section class="tab-inner">
-        <daily-worklog-table
-          [flatTasks]="tasksWorkedOnOrDoneOrRepeatableFlat$ | async"
-        ></daily-worklog-table>
+        <mat-button-toggle-group
+          aria-label="Select view mode"
+          [(ngModel)]="worklogViewMode"
+        >
+          <mat-button-toggle value="worklog">Work Log</mat-button-toggle>
+          <mat-button-toggle value="project">Group By Project</mat-button-toggle>
+          <mat-button-toggle value="tag">Group By Tag</mat-button-toggle>
+        </mat-button-toggle-group>
         @if (tasksWorkedOnOrDoneOrRepeatableFlat$ | async; as tasks) {
-          @if (tasks?.length) {
-            <task-summary-tables
-              [dayStr]="dayStr"
+          @if (worklogViewMode() === 'worklog') {
+            <daily-worklog-table
               [flatTasks]="tasks"
-              [isForToday]="isForToday"
-              [isShowYesterday]="isForToday && isIncludeYesterday"
-            ></task-summary-tables>
-          } @else if (isArchiveLoaded()) {
-            <p>{{ T.PDS.NO_TASKS | translate }}</p>
-          } @else {
-            <mat-spinner style="margin: auto"></mat-spinner>
+              style="margin-top: 12px"
+            ></daily-worklog-table>
           }
-          @if (tasks?.length) {
-            <tasks-by-tag
-              [dayStr]="dayStr"
-              [flatTasks]="tasks"
-              [isForToday]="isForToday"
-              [isShowYesterday]="isForToday && isIncludeYesterday"
-            ></tasks-by-tag>
+          @if (worklogViewMode() === 'project') {
+            @if (tasks?.length) {
+              <task-summary-tables
+                [dayStr]="dayStr"
+                [flatTasks]="tasks"
+                [isForToday]="isForToday"
+                [isShowYesterday]="isForToday && isIncludeYesterday"
+              ></task-summary-tables>
+            } @else if (isArchiveLoaded()) {
+              <p>{{ T.PDS.NO_TASKS | translate }}</p>
+            } @else {
+              <mat-spinner style="margin: auto"></mat-spinner>
+            }
+          }
+          @if (worklogViewMode() === 'tag') {
+            @if (tasks?.length) {
+              <tasks-by-tag
+                [dayStr]="dayStr"
+                [flatTasks]="tasks"
+                [isForToday]="isForToday"
+                [isShowYesterday]="isForToday && isIncludeYesterday"
+              ></tasks-by-tag>
+            } @else if (isArchiveLoaded()) {
+              <p>{{ T.PDS.NO_TASKS | translate }}</p>
+            } @else {
+              <mat-spinner style="margin: auto"></mat-spinner>
+            }
           }
           <section style="margin-top: 48px">
             <h3 style="font-weight: bold; margin-bottom: 4px">
