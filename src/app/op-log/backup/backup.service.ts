@@ -104,6 +104,18 @@ export class BackupService {
         );
       }
 
+      // 2b. Migrate from legacy time-tracking to session-based model if needed
+      const { needsTimeSessionMigration, migrateToTimeSessions } =
+        await import('./migrate-to-time-sessions');
+      if (needsTimeSessionMigration(backupData as unknown as Record<string, unknown>)) {
+        OpLog.normal(
+          'BackupService: Detected missing timeSession, running time-session migration...',
+        );
+        backupData = migrateToTimeSessions(
+          backupData as unknown as Record<string, any>,
+        ) as AppDataComplete;
+      }
+
       const normalizedGlobalConfig = normalizeGlobalConfigStartOfNextDay(
         backupData.globalConfig,
       );

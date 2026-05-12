@@ -157,7 +157,28 @@ export class OperationLogHydratorService {
         // synchronously if a migration ran (schema changed).
         // TODO: Consider removing this validation after ops-log testing phase.
         // Checkpoint C validates the final state anyway, making this redundant.
-        const stateToLoad = snapshot.state as AppStateSnapshot;
+        let stateToLoad = snapshot.state as AppStateSnapshot;
+
+        // Run time-session migration if the snapshot pre-dates the session model.
+        // This is a one-time, idempotent operation: once the migrated snapshot is
+        // persisted (below) the check will not fire again.
+        const { needsTimeSessionMigration, migrateToTimeSessions } =
+          await import('../backup/migrate-to-time-sessions');
+        if (
+          needsTimeSessionMigration(stateToLoad as unknown as Record<string, unknown>)
+        ) {
+          OpLog.normal(
+            'OperationLogHydratorService: Migrating legacy data to time-session model...',
+          );
+          stateToLoad = migrateToTimeSessions(
+            stateToLoad as unknown as Record<string, any>,
+          ) as unknown as AppStateSnapshot;
+          // Persist the migrated snapshot immediately so the migration does not
+          // repeat on subsequent startups.
+          await this.opLogStore.saveStateCache({ ...snapshot, state: stateToLoad });
+          this._migrationRanDuringHydration = true;
+        }
+
         const snapshotSchemaVersion = (snapshot as { schemaVersion?: number })
           .schemaVersion;
         const needsSyncValidation =

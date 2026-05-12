@@ -8,7 +8,12 @@ import { GlobalConfigService } from '../../config/global-config.service';
 import { TaskService } from '../task.service';
 import { EMPTY, Observable } from 'rxjs';
 import { moveProjectTaskToRegularList } from '../../project/store/project.actions';
-import { TimeTrackingActions } from '../../time-tracking/store/time-tracking.actions';
+import { addTimeSession } from '../../time-session/store/time-session.actions';
+import {
+  BREAK_TASK_ID,
+  WORK_END_ID,
+  WORK_START_ID,
+} from '../../time-session/time-session.model';
 import { Store } from '@ngrx/store';
 import { selectTodayTaskIds } from '../../work-context/store/work-context.selectors';
 import { LOCAL_ACTIONS } from '../../../util/local-actions.token';
@@ -35,23 +40,37 @@ export class TaskRelatedModelEffects {
   autoAddTodayTagOnTracking = createEffect(() =>
     this.ifAutoAddTodayEnabled$(
       this._actions$.pipe(
-        ofType(TimeTrackingActions.addTimeSpent),
+        ofType(addTimeSession),
         // PERF: Skip during hydration/sync to avoid selector evaluation overhead
         filter(() => !this._hydrationState.isApplyingRemoteOps()),
-        withLatestFrom(this._store.select(selectTodayTaskIds)),
+        // Skip special-purpose sessions (breaks, work markers)
         filter(
-          ([{ task }, todayTaskIds]) =>
-            !task.dueDay &&
-            typeof task.dueWithTime !== 'number' &&
-            !todayTaskIds.includes(task.id) &&
-            (!task.parentId || !todayTaskIds.includes(task.parentId)),
+          ({ timeSession }) =>
+            timeSession.tid !== BREAK_TASK_ID &&
+            timeSession.tid !== WORK_START_ID &&
+            timeSession.tid !== WORK_END_ID,
         ),
-        map(([{ task }]) =>
-          TaskSharedActions.planTasksForToday({
-            taskIds: [task.id],
-            today: this._dateService.todayStr(),
-            startOfNextDayDiffMs: this._dateService.getStartOfNextDayDiffMs(),
-          }),
+        withLatestFrom(this._store.select(selectTodayTaskIds)),
+        filter(([{ timeSession }, todayTaskIds]) => {
+          // Skip if the task itself is already in today
+          if (todayTaskIds.includes(timeSession.tid)) return false;
+          return true;
+        }),
+        mergeMap(([{ timeSession }]) =>
+          this._taskService.getByIdOnce$(timeSession.tid).pipe(
+            filter((task): task is Task => !!task),
+            // Skip subtasks whose parent is already scheduled for today
+            withLatestFrom(this._store.select(selectTodayTaskIds)),
+            filter(
+              ([task, todayTaskIds]) =>
+                !task.parentId || !todayTaskIds.includes(task.parentId),
+            ),
+            map(([task]) =>
+              TaskSharedActions.planTasksForToday({
+                taskIds: [task.id],
+              }),
+            ),
+          ),
         ),
       ),
     ),

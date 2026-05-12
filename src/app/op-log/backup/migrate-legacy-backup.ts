@@ -821,6 +821,7 @@ const V17_VALID_KEYS = new Set([
   'taskRepeatCfg',
   'reminders',
   'timeTracking',
+  'timeSession',
   'pluginUserData',
   'pluginMetadata',
   'archiveYoung',
