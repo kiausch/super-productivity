@@ -11,22 +11,9 @@
     height: 36px !important;
   }
 
-  td {
-    text-align: center;
-
-    color: var(--text-color-muted);
-
-    inline-input {
-      color: var(--text-color);
-    }
-  }
-
-  th {
-    text-align: center;
-  }
-
   th,
   td {
+    text-align: center;
     min-width: 50px;
   }
 
@@ -85,6 +72,7 @@
   tr.unaccounted {
     td {
       font-style: italic;
+      color: var(--text-color-muted);
     }
 
     span.dash,
@@ -99,6 +87,7 @@
 }
 
 .entry-actions {
+  color: var(--text-color-muted);
   button {
     opacity: 0;
   }
