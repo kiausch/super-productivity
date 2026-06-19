@@ -147,18 +147,15 @@
             </button>
           }
         }
-        @if (entry.type === 'task' || entry.type === 'break') {
+        @if (entry.type === 'task' && entry.task) {
           <button
             mat-icon-button
-            (click)="deleteEntry(entry)"
-            class="delete-entry"
-            [title]="'Delete Entry'"
-            aria-label="Delete Entry"
+            (click)="viewTaskDetails(entry.task)"
+            class="view-details-btn"
+            [title]="T.F.WORKLOG.CMP.VIEW_TASK_DETAILS | translate"
           >
-            <mat-icon>delete</mat-icon>
+            <mat-icon>info</mat-icon>
           </button>
-        }
-        @if (entry.type === 'task' && entry.task) {
           <button
             (click)="toggleTaskDone(entry.task)"
             [class.isDone]="entry.task.isDone"
@@ -176,6 +173,17 @@
               class="check"
               >check
             </mat-icon>
+          </button>
+        }
+        @if (entry.type === 'task' || entry.type === 'break') {
+          <button
+            mat-icon-button
+            (click)="deleteEntry(entry)"
+            class="delete-entry"
+            [title]="'Delete Entry'"
+            aria-label="Delete Entry"
+          >
+            <mat-icon>delete</mat-icon>
           </button>
         }
         @if (entry.type === 'unaccounted') {

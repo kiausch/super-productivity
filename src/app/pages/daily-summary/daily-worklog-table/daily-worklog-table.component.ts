@@ -38,6 +38,7 @@ import {
 } from '../../../features/time-session/time-session.model';
 import { MatDialog } from '@angular/material/dialog';
 import { DialogAddTaskComponent } from './dialog-add-task.component';
+import { DialogViewArchivedTaskComponent } from '../../../features/tasks/dialog-view-archived-task/dialog-view-archived-task.component';
 
 // data container for table entries
 // can be a time session, work start/end, break, unaccounted time
@@ -182,7 +183,12 @@ export class DailyWorklogTableComponent {
   workStart = this._timeSessionService.getWorkStart(this.dayStr);
   workEnd = this._timeSessionService.getWorkEnd(this.dayStr);
   workTime = computed(() => {
-    return (this.workEnd() || 0) - (this.workStart() || 0);
+    if (this.allSessionsHaveStartTime()) {
+      return (this.workEnd() || 0) - (this.workStart() || 0);
+    } else {
+      // if some sessions don't have start time, calculate work time as sum of task and break time
+      return this.taskTime() + this.breakTime();
+    }
   });
   breakTime = computed(() => {
     const sessions = this._timeSessionService.todaySessions();
@@ -197,10 +203,32 @@ export class DailyWorklogTableComponent {
       .reduce((acc, session) => acc + session.t, 0);
   });
   unaccountedTime = computed(() => {
-    return this.workTime() - this.taskTime() - this.breakTime();
+    /* Unaccounted time is the time between work start and work end that is not tracked
+     * as task or break time. If there are sessions without start time, we can't be sure
+     * about the work start and end times (unless they are manually set). In this case,
+     * we don't calculate unaccounted time and return 0 to not show it in the table */
+    if (
+      this.allSessionsHaveStartTime() ||
+      (this.workStartIsManual() && this.workEndIsManual())
+    ) {
+      return this.workTime() - this.taskTime() - this.breakTime();
+    } else {
+      return 0;
+    }
   });
   workStartIsManual = this._timeSessionService.isManualWorkStart(this.dayStr);
   workEndIsManual = this._timeSessionService.isManualWorkEnd(this.dayStr);
+  allSessionsHaveStartTime = computed(() => {
+    const sessions = this._timeSessionService.todaySessions();
+    return sessions
+      .filter(
+        (session) =>
+          session.tid !== BREAK_TASK_ID &&
+          session.tid != WORK_START_ID &&
+          session.tid != WORK_END_ID,
+      )
+      .every((session) => session.s !== undefined);
+  });
 
   onStartChanged(entry: TableEntry, ev: string): void {
     if (ev === '') {
@@ -318,5 +346,12 @@ export class DailyWorklogTableComponent {
 
   setAutoEndTime(): void {
     this._timeSessionService.setAutoWorkEnd(this.dayStr);
+  }
+
+  viewTaskDetails(task: Task): void {
+    this._matDialog.open(DialogViewArchivedTaskComponent, {
+      restoreFocus: true,
+      data: { task },
+    });
   }
 }
