@@ -12,11 +12,6 @@ import {
 } from '../provider.interface';
 import { EncryptAndCompressHandlerService } from '../../encryption/encrypt-and-compress-handler.service';
 import { EncryptAndCompressCfg } from '../../core/types/sync.types';
-import { CompactOperation } from '../../../core/persistence/operation-log/compact/compact-operation.types';
-import {
-  encodeOperation,
-  decodeOperation,
-} from '../../../core/persistence/operation-log/compact/operation-codec.service';
 import {
   Operation,
   VectorClock,
@@ -41,6 +36,12 @@ import {
 import { mergeVectorClocks } from '../../../core/util/vector-clock';
 import { ArchiveDbAdapter } from '../../../core/persistence/archive-db-adapter.service';
 import { StateSnapshotService } from '../../backup/state-snapshot.service';
+import { stripLocalOnlySyncSettingsFromAppData } from '../../../features/config/local-only-sync-settings.util';
+import { CompactOperation } from '../../persistence/compact/compact-operation.types';
+import {
+  encodeOperation,
+  decodeOperation,
+} from '../../persistence/compact/operation-codec.service';
 
 /**
  * Adapter that enables file-based sync providers (WebDAV, Dropbox, LocalFile)
@@ -406,7 +407,9 @@ export class FileBasedSyncAdapterService {
     const archiveOld = await this._archiveDbAdapter.loadArchiveOld();
 
     // Get current state from NgRx store - this keeps the snapshot up-to-date
-    const currentState = await this._stateSnapshotService.getStateSnapshot();
+    const currentState = stripLocalOnlySyncSettingsFromAppData(
+      await this._stateSnapshotService.getStateSnapshot(),
+    );
 
     // Compute oldestOpSyncVersion from the first (oldest) op in mergedOps.
     // Ops without sv (from old sync files) are ignored — gap detection stays
@@ -783,7 +786,9 @@ export class FileBasedSyncAdapterService {
     //    sync cycle, so fetching directly ensures we capture the latest store state.
     // Note: double-encryption is not a concern here — file-based providers don't expose
     // getEncryptKey, so the upload service never applies payload-level encryption for them.
-    const currentState = await this._stateSnapshotService.getStateSnapshot();
+    const currentState = stripLocalOnlySyncSettingsFromAppData(
+      await this._stateSnapshotService.getStateSnapshot(),
+    );
 
     // Load archive data from IndexedDB to include in snapshot
     const archiveYoung = await this._archiveDbAdapter.loadArchiveYoung();

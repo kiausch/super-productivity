@@ -1,11 +1,11 @@
 import { ConfigFormSection, LimitedFormlyFieldConfig } from '../global-config.model';
 import { T } from '../../../t.const';
 import { IS_ELECTRON } from '../../../app.constants';
-import { KeyboardConfig } from '../keyboard-config.model';
+import { KeyboardConfig } from '@sp/keyboard-config';
 
 /** Builds a single keyboard-shortcut form field (the dominant, repeated shape). */
 const kbField = (
-  key: keyof KeyboardConfig,
+  key: keyof KeyboardConfig & (string | number),
   label: string,
 ): LimitedFormlyFieldConfig<KeyboardConfig> => ({
   key,
@@ -40,6 +40,7 @@ export const KEYBOARD_SETTINGS_FORM_CFG: ConfigFormSection<KeyboardConfig> = {
           kbField('globalToggleTaskStart', T.GCF.KEYBOARD.GLOBAL_TOGGLE_TASK_START),
           kbField('globalAddNote', T.GCF.KEYBOARD.GLOBAL_ADD_NOTE),
           kbField('globalAddTask', T.GCF.KEYBOARD.GLOBAL_ADD_TASK),
+          kbField('globalToggleTaskWidget', T.GCF.KEYBOARD.GLOBAL_TOGGLE_TASK_WIDGET),
         ]
       : []),
     // APP WIDE
@@ -79,14 +80,6 @@ export const KEYBOARD_SETTINGS_FORM_CFG: ConfigFormSection<KeyboardConfig> = {
     kbField('zoomIn', T.GCF.KEYBOARD.ZOOM_IN),
     kbField('zoomOut', T.GCF.KEYBOARD.ZOOM_OUT),
     kbField('zoomDefault', T.GCF.KEYBOARD.ZOOM_DEFAULT),
-    // TODO implement somehow
-    // {
-    //   key: 'saveNote',
-    //   type: 'keyboard',
-    //   templateOptions: {
-    //     label: T.GCF.KEYBOARD.SAVE_NOTE,
-    //   },
-    // },
     kbField('triggerSync', T.GCF.KEYBOARD.TRIGGER_SYNC),
 
     // TASKS
@@ -104,6 +97,11 @@ export const KEYBOARD_SETTINGS_FORM_CFG: ConfigFormSection<KeyboardConfig> = {
     kbField('taskOpenNotesPanel', T.GCF.KEYBOARD.TASK_OPEN_NOTES_PANEL),
     kbField('taskOpenEstimationDialog', T.GCF.KEYBOARD.TASK_OPEN_ESTIMATION_DIALOG),
     kbField('taskSchedule', T.GCF.KEYBOARD.TASK_SCHEDULE),
+    kbField('taskScheduleToday', T.GCF.KEYBOARD.TASK_SCHEDULE_TODAY),
+    kbField('taskScheduleTomorrow', T.GCF.KEYBOARD.TASK_SCHEDULE_TOMORROW),
+    kbField('taskScheduleNextWeek', T.GCF.KEYBOARD.TASK_SCHEDULE_NEXT_WEEK),
+    kbField('taskScheduleNextMonth', T.GCF.KEYBOARD.TASK_SCHEDULE_NEXT_MONTH),
+    kbField('taskScheduleDeadline', T.GCF.KEYBOARD.TASK_SCHEDULE_DEADLINE),
     kbField('taskUnschedule', T.GCF.KEYBOARD.TASK_UNSCHEDULE),
     kbField('taskToggleDone', T.GCF.KEYBOARD.TASK_TOGGLE_DONE),
     kbField('taskAddSubTask', T.GCF.KEYBOARD.TASK_ADD_SUB_TASK),
@@ -119,7 +117,6 @@ export const KEYBOARD_SETTINGS_FORM_CFG: ConfigFormSection<KeyboardConfig> = {
     kbField('moveTaskToTop', T.GCF.KEYBOARD.MOVE_TASK_TO_TOP),
     kbField('moveTaskToBottom', T.GCF.KEYBOARD.MOVE_TASK_TO_BOTTOM),
     kbField('moveToBacklog', T.GCF.KEYBOARD.MOVE_TO_BACKLOG),
-    kbField('moveToTodaysTasks', T.GCF.KEYBOARD.MOVE_TO_REGULARS_TASKS),
     kbField('expandSubTasks', T.GCF.KEYBOARD.EXPAND_SUB_TASKS),
     kbField('collapseSubTasks', T.GCF.KEYBOARD.COLLAPSE_SUB_TASKS),
     kbField('togglePlay', T.GCF.KEYBOARD.TOGGLE_PLAY),

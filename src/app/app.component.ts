@@ -21,6 +21,7 @@ import { TaskWidgetSettingsService } from './features/config/task-widget-setting
 import { LayoutService } from './core-ui/layout/layout.service';
 import { SnackService } from './core/snack/snack.service';
 import { IS_ELECTRON } from './app.constants';
+import { IS_MAC } from './util/is-mac';
 import { expandAnimation } from './ui/animations/expand.ani';
 import { warpRouteAnimation } from './ui/animations/warp-route';
 import { firstValueFrom, Subscription } from 'rxjs';
@@ -30,6 +31,7 @@ import { LS } from './core/persistence/storage-keys.const';
 import { BannerId } from './core/banner/banner.model';
 import { T } from './t.const';
 import { GlobalThemeService } from './core/theme/global-theme.service';
+import { resolveBgImageToDataUrl } from './core/theme/resolve-bg-image-to-data-url.util';
 import { LanguageService } from './core/language/language.service';
 import { WorkContextService } from './features/work-context/work-context.service';
 import { SyncTriggerService } from './imex/sync/sync-trigger.service';
@@ -68,7 +70,7 @@ import { SectionService } from './features/section/section.service';
 import { DialogPromptComponent } from './ui/dialog-prompt/dialog-prompt.component';
 import { TODAY_TAG } from './features/tag/tag.const';
 import { normalizeBackgroundImageBlur } from './features/work-context/work-context.const';
-import type { WorkContextSettingsDialogData } from './features/work-context/dialog-work-context-settings/dialog-work-context-settings.component';
+import { openWorkContextSettingsDialog } from './features/work-context/dialog-work-context-settings/open-work-context-settings-dialog';
 import { isInputElement } from './util/dom-element';
 import { MobileBottomNavComponent } from './core-ui/mobile-bottom-nav/mobile-bottom-nav.component';
 import { StartupService } from './core/startup/startup.service';
@@ -173,6 +175,7 @@ export class AppComponent implements OnDestroy, AfterViewInit {
   readonly _store = inject(Store);
   private _sectionService = inject(SectionService);
   private _browserTitleService = inject(BrowserTitleService);
+  private _hasShownLegacyFileBgSnack = false;
   readonly T = T;
   readonly TODAY_TAG_ID = TODAY_TAG.id;
   readonly isShowMobileButtonNav = this.layoutService.isShowMobileBottomNav;
@@ -282,33 +285,24 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     effect(() => {
       const bgImage = this._globalThemeService.backgroundImg();
       const currentRequestId = ++bgResolveRequestId;
-      if (!bgImage) {
-        this.resolvedBgImage.set(null);
-        return;
-      }
-
-      if (!IS_ELECTRON || !bgImage.startsWith('file://')) {
-        this.resolvedBgImage.set(bgImage);
-        return;
-      }
-
-      const readLocalImageAsDataUrl = window.ea?.readLocalImageAsDataUrl;
-      if (!readLocalImageAsDataUrl) {
-        this.resolvedBgImage.set(null);
-        return;
-      }
-
-      readLocalImageAsDataUrl(bgImage)
-        .then((dataUrl) => {
-          if (currentRequestId === bgResolveRequestId) {
-            this.resolvedBgImage.set(dataUrl || null);
-          }
-        })
-        .catch(() => {
-          if (currentRequestId === bgResolveRequestId) {
-            this.resolvedBgImage.set(null);
-          }
+      if (
+        typeof bgImage === 'string' &&
+        bgImage.startsWith('file://') &&
+        !this._hasShownLegacyFileBgSnack
+      ) {
+        this._hasShownLegacyFileBgSnack = true;
+        this._snackService.open({
+          msg: T.F.PROJECT.FORM_THEME.S_BACKGROUND_IMAGE_RESELECT_REQUIRED,
+          type: 'WARNING',
+          config: { duration: 0 },
         });
+      }
+      void resolveBgImageToDataUrl(bgImage).then((resolved) => {
+        // Ignore stale resolutions when the source changed mid-read.
+        if (currentRequestId === bgResolveRequestId) {
+          this.resolvedBgImage.set(resolved);
+        }
+      });
     });
 
     this._syncTriggerService.afterInitialSyncDoneAndDataLoadedInitially$
@@ -320,8 +314,11 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     // ! For keyboard shortcuts to work correctly with any layouts (QWERTZ/AZERTY/etc) - user's keyboard layout must be presaved
     // Connect the service to the utility functions
     setKeyboardLayoutService(this._keyboardLayoutService);
-    // Defer keyboard layout detection to idle time for better initial load performance
-    if (typeof requestIdleCallback === 'function') {
+    // Defer keyboard layout detection to idle time for better initial load performance,
+    // EXCEPT on macOS Electron where it is needed eagerly for the initial global shortcut registration.
+    if (IS_ELECTRON && IS_MAC) {
+      void this._keyboardLayoutService.saveUserLayout();
+    } else if (typeof requestIdleCallback === 'function') {
       requestIdleCallback(() => this._keyboardLayoutService.saveUserLayout());
     } else {
       setTimeout(() => this._keyboardLayoutService.saveUserLayout(), 0);
@@ -468,16 +465,13 @@ export class AppComponent implements OnDestroy, AfterViewInit {
     const entity = isForProject
       ? await firstValueFrom(this._projectService.getByIdOnce$(contextId))
       : await firstValueFrom(this._tagService.getTagById$(contextId).pipe(first()));
+    if (!entity) {
+      return;
+    }
 
-    const { DialogWorkContextSettingsComponent } =
-      await import('./features/work-context/dialog-work-context-settings/dialog-work-context-settings.component');
-    this._matDialog.open(DialogWorkContextSettingsComponent, {
-      restoreFocus: true,
-      backdropClass: 'cdk-overlay-transparent-backdrop',
-      data: {
-        isProject: isForProject,
-        entity,
-      } as WorkContextSettingsDialogData,
+    await openWorkContextSettingsDialog(this._matDialog, {
+      isProject: isForProject,
+      entity,
     });
   }
 
@@ -506,6 +500,12 @@ export class AppComponent implements OnDestroy, AfterViewInit {
       this.isAppEntrance.set(false);
       this.onboardingHintService.startAfterPresetSelection();
     }, ONBOARDING_ENTRANCE_COMPLETE_DELAY);
+  }
+
+  // Returning user set up sync from onboarding: just reveal the app with their
+  // synced data — no preset applied, no new-user hint tour.
+  onOnboardingDismissed(): void {
+    this.isShowOnboardingPresets.set(false);
   }
 
   ngAfterViewInit(): void {

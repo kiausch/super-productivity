@@ -6,6 +6,7 @@ import {
   MissingCredentialsSPError,
   RemoteFileChangedUnexpectedly,
   RemoteFileNotFoundAPIError,
+  WebDavSyncFolderUnusableSPError,
 } from '../../errors';
 import { errorMeta } from '../../log/error-meta';
 import { computeContentRev } from '../content-rev';
@@ -257,13 +258,17 @@ export class WebdavApi {
               retryError.response.status === WebDavHttpStatus.CONFLICT
             ) {
               // Demoted from `critical` to `normal`: this is a config-debug
-              // hint, not an exceptional / unrecoverable condition. The
-              // caller still gets the thrown error to surface in the UI.
+              // hint, not an exceptional / unrecoverable condition.
               this._deps.logger.normal(
                 `${WebdavApi.L}.upload() 409 Conflict persists after creating parent. ` +
                   `Verify syncFolderPath is relative to the WebDAV server root.`,
                 { path },
               );
+              // Re-throw as an actionable, privacy-safe error so the user
+              // sees *why* sync fails (misconfigured Base URL / Sync Folder
+              // Path) instead of a bare "HTTP 409 Conflict". The raw 409 is
+              // already captured by the logger.normal() call above.
+              throw new WebDavSyncFolderUnusableSPError();
             }
             throw retryError;
           }
@@ -364,7 +369,7 @@ export class WebdavApi {
    */
   async testConnection(
     cfg: WebdavPrivateCfg,
-  ): Promise<{ success: boolean; error?: string; fullUrl: string }> {
+  ): Promise<{ success: boolean; error?: string; fullUrl: string; errorCode?: number }> {
     const fullPath = this._buildFullPath(cfg.baseUrl, cfg.syncFolderPath || '/');
 
     try {
@@ -397,6 +402,7 @@ export class WebdavApi {
         success: false,
         error: `Unexpected status ${response.status}`,
         fullUrl: fullPath,
+        errorCode: response.status,
       };
     } catch (e) {
       // testConnection is user-initiated and failure is the expected
@@ -404,9 +410,39 @@ export class WebdavApi {
       // `critical`, so the exportable log isn't dominated by
       // configuration debugging.
       this._deps.logger.normal(`${WebdavApi.L}.testConnection() failed`, errorMeta(e));
-      const errMsg = e instanceof Error ? e.message : 'Unknown error occurred';
-      return { success: false, error: errMsg, fullUrl: fullPath };
+      const { message, errorCode } = WebdavApi._describeTestError(e);
+      return { success: false, error: message, fullUrl: fullPath, errorCode };
     }
+  }
+
+  /**
+   * Map a thrown WebDAV error to a readable, privacy-safe message for the
+   * "Test connection" UI. The only case that needs remapping is the
+   * base-root 404 (issue #7617): `RemoteFileNotFoundAPIError`'s message is
+   * the bare scrubbed host, which read as a cryptic error and led users to
+   * misdiagnose their config. It is replaced with a readable string and
+   * tagged with `errorCode: 404` — the single discriminator the dialog
+   * branches on to show the Nextcloud "Username is your user ID" hint.
+   *
+   * Every other error already has a readable, privacy-safe `.message`
+   * (e.g. `HttpNotOkAPIError.message` is `HTTP <status> <statusText>`,
+   * never the `.detail` body which can carry filenames; `AuthFailSPError`
+   * is "Authentication failed (HTTP 401)"), so they pass through unchanged.
+   * Callers must keep this UI-only and never route it to a structured logger.
+   */
+  private static _describeTestError(e: unknown): { message: string; errorCode?: number } {
+    if (e instanceof RemoteFileNotFoundAPIError) {
+      return {
+        message:
+          'Not found (HTTP 404): no folder exists at this WebDAV path. ' +
+          'Check the Base URL.',
+        errorCode: WebDavHttpStatus.NOT_FOUND,
+      };
+    }
+    if (e instanceof Error) {
+      return { message: e.message };
+    }
+    return { message: 'Unknown error occurred' };
   }
 
   private async _makeRequest({

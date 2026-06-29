@@ -1,11 +1,10 @@
 /**
- * E2E coverage for the new `autoStartFocusOnPlay` opt-in.
+ * E2E coverage for the `autoStartFocusOnPlay` opt-in.
  *
- * Behavior under test (from
- * docs/plans/2026-04-29-focus-mode-time-tracking-sync.md): when the user
- * enables this setting and starts tracking a task, a focus session must
- * spawn automatically *without* opening the focus-mode overlay — the
- * header focus-button countdown is the only surface.
+ * Behavior under test: when the user enables this setting and starts
+ * tracking a task, a focus session must spawn automatically *without*
+ * opening the focus-mode overlay — the header focus-button countdown is
+ * the only surface.
  *
  * If this regresses, the headline feature of the rework is broken with
  * no other automated test catching it.
@@ -60,8 +59,17 @@ test.describe('autoStartFocusOnPlay', () => {
     // Step 1: enable the new setting via Settings UI.
     await enableAutoStartOnPlay(page);
 
-    // Step 2: navigate back to work view and add a task.
-    await page.goto('/');
+    // Step 2: navigate back to the work view and add a task.
+    // Use a same-document hash navigation rather than `page.goto('/')`. A hard
+    // reload re-bootstraps the app and re-reads the config from IndexedDB,
+    // which races the debounced persistence of the toggle we just flipped: if
+    // the write hasn't flushed yet, the reloaded app boots with
+    // autoStartFocusOnPlay=false and the session never spawns — a flake no
+    // timeout can fix. Hash nav keeps the in-memory NgRx config that the toggle
+    // already updated synchronously, so we test the auto-start behavior without
+    // depending on persistence timing.
+    await page.goto('/#/tag/TODAY/tasks');
+    await page.waitForURL(/tag\/TODAY/);
     await workViewPage.waitForTaskList();
     await workViewPage.addTask('AutoStartTask');
 

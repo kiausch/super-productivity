@@ -35,6 +35,7 @@ const EXPECTED_REPLAY_OPERATION_SELECT = {
   opType: true,
   entityType: true,
   entityId: true,
+  entityIds: true,
   payload: true,
   schemaVersion: true,
   isPayloadEncrypted: true,
@@ -468,7 +469,7 @@ describe('SnapshotService', () => {
     });
 
     it('should invoke onCacheDelta with the bytes-written delta after a snapshot rewrite', async () => {
-      // Regression for C3: GET /snapshot rewrites snapshotData inside its
+      // Regression for C3: generateSnapshot rewrites snapshotData inside its
       // transaction, but the storage counter is updated incrementally based
       // on op deltas only. Without this hook the cache can grow up to
       // MAX_SNAPSHOT_SIZE_BYTES with no quota accounting.
@@ -525,7 +526,7 @@ describe('SnapshotService', () => {
     });
 
     it('should skip the cache write when the new blob exceeds maxCacheBytes (B5)', async () => {
-      // Regression for B5: GET /snapshot must not grow `snapshotData` beyond
+      // Regression for B5: generateSnapshot must not grow `snapshotData` beyond
       // the user's remaining quota. When `maxCacheBytes` is set and the new
       // compressed blob would exceed it (accounting for the bytes the
       // previously-cached snapshot will free), skip the cache write — the

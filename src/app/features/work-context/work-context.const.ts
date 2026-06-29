@@ -175,7 +175,7 @@ export const WORK_CONTEXT_THEME_CONFIG_FORM_CONFIG: ConfigFormSection<WorkContex
         type: 'image-input',
         templateOptions: {
           label: T.F.PROJECT.FORM_THEME.L_BACKGROUND_IMAGE_DARK,
-          description: '* https://some/cool.jpg, file:///home/user/bg.png',
+          description: '* https://some/cool.jpg',
         },
       },
       {
@@ -183,12 +183,17 @@ export const WORK_CONTEXT_THEME_CONFIG_FORM_CONFIG: ConfigFormSection<WorkContex
         type: 'image-input',
         templateOptions: {
           label: T.F.PROJECT.FORM_THEME.L_BACKGROUND_IMAGE_LIGHT,
-          description: '* https://some/cool.jpg, file:///home/user/bg.png',
+          description: '* https://some/cool.jpg',
         },
       },
       {
         key: 'backgroundOverlayOpacity',
         type: 'slider',
+        // Keep the value while the slider is hidden (no background image set).
+        // Formly's default `resetFieldOnHide` would otherwise wipe it to
+        // `undefined`, so removing and re-adding an image reset the slider to
+        // 0% instead of the configured value. See #8504.
+        resetOnHide: false,
         props: {
           label: T.F.PROJECT.FORM_THEME.L_BACKGROUND_OVERLAY_OPACITY,
           description: T.F.PROJECT.FORM_THEME.D_BACKGROUND_OVERLAY_OPACITY,
@@ -207,6 +212,8 @@ export const WORK_CONTEXT_THEME_CONFIG_FORM_CONFIG: ConfigFormSection<WorkContex
       {
         key: 'backgroundImageBlur',
         type: 'slider',
+        // See backgroundOverlayOpacity above (#8504).
+        resetOnHide: false,
         props: {
           label: T.F.PROJECT.FORM_THEME.L_BACKGROUND_IMAGE_BLUR,
           description: T.F.PROJECT.FORM_THEME.D_BACKGROUND_IMAGE_BLUR,

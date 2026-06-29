@@ -53,6 +53,7 @@ import {
   selectTasksByRepeatConfigId,
   selectTasksByTag,
   selectTaskWithSubTasksByRepeatConfigId,
+  selectTimeConflictTaskIds,
 } from './store/task.selectors';
 import { selectTodayTaskIds } from '../work-context/store/work-context.selectors';
 import { RoundTimeOption } from '../project/project.model';
@@ -148,6 +149,11 @@ export class TaskService {
 
   // Set version for O(1) lookup - used by task components to check membership
   todayListSet = computed(() => new Set(this.todayList()));
+
+  // Shared signal to avoid one store subscription per rendered task component
+  timeConflictTaskIds = toSignal(this._store.pipe(select(selectTimeConflictTaskIds)), {
+    initialValue: new Set<string>(),
+  });
 
   selectedTask$: Observable<TaskWithSubTasks | null> = this._store.pipe(
     select(selectSelectedTask),
@@ -743,7 +749,9 @@ export class TaskService {
       }),
     );
 
-    this.focusTaskById(task.id, !task.title?.trim().length);
+    if (!task.title?.trim().length) {
+      this.focusTaskById(task.id, true);
+    }
 
     return task.id;
   }
@@ -763,12 +771,19 @@ export class TaskService {
         // the parent's sub-task list). Focusing the panel copy preserves the
         // user's current context (parent stays selected) and on mobile lands
         // on a visible input rather than the main-list copy that the panel
-        // overlays (#7120).
+        // overlays (#7120). Fall back to an earlier copy when the last one
+        // can't take focus — e.g. the side panel's sub-task section is
+        // collapsed, so its copy is in the DOM but not focusable.
         const allEls = document.querySelectorAll<HTMLElement>(`#t-${CSS.escape(taskId)}`);
-        const taskElement = allEls[allEls.length - 1];
+        let taskElement: HTMLElement | undefined;
+        for (let i = allEls.length - 1; i >= 0; i--) {
+          allEls[i].focus();
+          if (document.activeElement === allEls[i]) {
+            taskElement = allEls[i];
+            break;
+          }
+        }
         if (!taskElement) return;
-
-        taskElement.focus();
 
         if (shouldStartEditing) {
           const taskComponent = this._taskFocusService.lastFocusedTaskComponent();

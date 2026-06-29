@@ -26,7 +26,7 @@ At 6-char client IDs, a 20-entry clock is ~333 bytes — negligible bandwidth. A
 
 ## 2. Core Operations
 
-Three operations — compare, merge, and prune (`limitVectorClockSize`) — are implemented in the generic sync-core package (`packages/sync-core/src/vector-clock.ts`), used by both client and server. `packages/shared-schema/src/vector-clock.ts` re-exports those algorithms for existing shared-schema import paths. Two operations — initialize and increment — are client-only (`src/app/core/util/vector-clock.ts`), which also wraps the shared operations with null-handling and logging.
+Three operations — compare, merge, and prune (`limitVectorClockSize`) — are implemented in the generic sync-core package (`packages/sync-core/src/vector-clock.ts`), used by both client and server. Two operations — initialize and increment — are client-only (`src/app/core/util/vector-clock.ts`), which also wraps the shared operations with null-handling and logging.
 
 ### Create
 
@@ -142,7 +142,7 @@ Otherwise:
   3. Return clock with exactly MAX entries
 ```
 
-Implemented in `packages/sync-core/src/vector-clock.ts` and re-exported from `packages/shared-schema/src/vector-clock.ts`. The client wrapper in `src/app/core/util/vector-clock.ts` adds logging and passes `[currentClientId]` as the preserve list.
+Implemented in `packages/sync-core/src/vector-clock.ts`. The client wrapper in `src/app/core/util/vector-clock.ts` adds logging and passes `[currentClientId]` as the preserve list.
 
 ### When Pruning Happens (Exhaustive List)
 
@@ -226,6 +226,22 @@ An import is an explicit user action to restore **all clients** to a specific st
 ### Full-State Operations Skip Server Conflict Detection
 
 In `detectConflict()`, operations with `opType` of `SYNC_IMPORT`, `BACKUP_IMPORT`, or `REPAIR` return `{ hasConflict: false }` immediately. These operations replace entire state and don't operate on individual entities.
+
+### Multi-Entity Ops and Server-Side Conflict Detection (issue #8334)
+
+An op may carry `entityIds: string[]` (batch actions: `deleteTasks`, `moveToArchive`, `__updateMultipleTaskSimple`, round-time-spent, task-repeat-cfg/board/issue-provider batches). `detectConflict()` checks the **incoming** op against **all** of its `entityIds`. The op must also be **looked up** by all of its entities once stored — otherwise a later stale write to a non-first entity would find no prior writer and be wrongly accepted as non-conflicting.
+
+To make that symmetric, the `operations` row stores:
+
+- `entity_id` — the client-supplied scalar. For batch ops the client sets it to `entityIds[0]` (`operation-log.effects.ts`), but the **server does not enforce** `entity_id === entityIds[0]`. It is the lookup key for single-entity ops and the first entity of multi-entity ops, and is also used by duplicate detection.
+- `entity_ids` — the entity set for **multi-entity ops only** (a `text[]` column; populated via `getStoredEntityIds(op)`, which returns `[]` for single-entity ops). Keeping single-entity rows out of this column keeps the `GIN(entity_ids)` index small and the array-branch lookup cheap.
+
+The lookups in `conflict.ts` match a requested entity as the scalar `entity_id` **or** a member of `entity_ids`:
+
+- `detectConflictForEntity` (single) — Prisma `where: { OR: [{ entityId }, { entityIds: { has: entityId } }] }`, ordered by `server_seq`. The `OR` spans the `entity_id` btree and the `entity_ids` GIN, so the planner uses a `BitmapOr` + sort bounded by the entity's stored version depth (op-log pruning keeps that small). If a real-Postgres `EXPLAIN` on a deep-history entity ever shows this hot path is a problem, the escalation is two ordered `LIMIT 1` lookups (scalar btree + `entity_ids` GIN) taking the higher `server_seq` — the array side stays small because the column is multi-entity-only.
+- `detectConflictForEntities` / `prefetchLatestEntityOpsForBatch` (batch) — raw SQL unnesting `CASE WHEN cardinality(entity_ids) > 0 THEN entity_ids ELSE ARRAY[entity_id] END`, with a `entity_ids && ... OR entity_id = ANY(...)` prefilter so the `GIN(entity_ids)` index (migration `20260613000001`) and the existing `entity_id` btree stay usable.
+
+**Forward-only by design:** rows written before migration `20260613000000` have an empty `entity_ids` array and fall back to the scalar `entity_id` (= first entity) in the `CASE` expression / scalar branch above — there is no `UPDATE` backfill. Entities 2..n of already-stored multi-entity ops were never persisted and are unrecoverable, so they remain invisible to conflict detection until that entity gets a fresh write. This residual is bounded: client-side LWW is unaffected (the client persists the full op and `VectorClockService.getEntityFrontier()` fans each op out to **every** entity), and the server only builds an authoritative snapshot from non-encrypted ops (`replayOpsToState()` throws on encrypted ops), so the pre-fix gap could only surface a stale value to a fresh client on non-encrypted self-hosted servers.
 
 ### The `SyncImportFilterService` Algorithm
 
@@ -329,7 +345,7 @@ Rules that must hold for the system to be correct. Use these to verify implement
 
 3. **Client does NOT prune during conflict resolution.** `SupersededOperationResolverService` sends full merged clocks; the server prunes after accepting.
 
-4. **`compareVectorClocks` produces identical results on client and server.** Both import from `@sp/shared-schema`. The client wrapper only adds null handling.
+4. **`compareVectorClocks` produces identical results on client and server.** Both import from `@sp/sync-core`. The client wrapper only adds null handling.
 
 5. **Full-state ops skip conflict detection on server.** `detectConflict()` returns `{ hasConflict: false }` for SYNC_IMPORT, BACKUP_IMPORT, and REPAIR.
 
@@ -346,7 +362,7 @@ Rules that must hold for the system to be correct. Use these to verify implement
 | Concept                                                     | File(s)                                                                      |
 | ----------------------------------------------------------- | ---------------------------------------------------------------------------- |
 | Core algorithms (compare, merge, prune)                     | `packages/sync-core/src/vector-clock.ts`                                     |
-| Compatibility re-export for existing shared-schema imports  | `packages/shared-schema/src/vector-clock.ts`                                 |
+| Compatibility re-export for existing shared-schema imports  | (removed — imports now target `@sp/sync-core` directly)                      |
 | Client wrappers (null handling, logging, validation)        | `src/app/core/util/vector-clock.ts`                                          |
 | Global clock management, entity frontier                    | `src/app/op-log/sync/vector-clock.service.ts`                                |
 | Operation capture (no pruning, atomic clock update)         | `src/app/op-log/capture/operation-log.effects.ts`                            |

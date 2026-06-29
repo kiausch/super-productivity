@@ -16,16 +16,8 @@ import { catchError } from 'rxjs/operators';
 import { HANDLED_ERROR_PROP_STR } from '../../../../app.constants';
 import { throwHandledError } from '../../../../util/throw-handled-error';
 import { IssueLog } from '../../../../core/log';
-import { Capacitor, registerPlugin } from '@capacitor/core';
-
-interface WebDavHttpPlugin {
-  request(options: {
-    url: string;
-    method: string;
-    headers?: Record<string, string>;
-    data?: string;
-  }): Promise<{ status: number; headers: Record<string, string>; data: string }>;
-}
+import { Capacitor } from '@capacitor/core';
+import { WebDavHttp } from '../../../../op-log/sync-providers/file-based/webdav/capacitor-webdav-http';
 
 /** Subset of the XMLHttpRequest surface that @nextcloud/cdav-library v1.5.3 actually uses. */
 interface XhrLike {
@@ -48,11 +40,15 @@ interface XhrLike {
   onreadystatechange: ((event: unknown) => void) | null;
 }
 
-const WebDavHttp = registerPlugin<WebDavHttpPlugin>('WebDavHttp');
-
 interface ClientCache {
   client: DavClient;
   calendars: Map<string, Calendar>;
+}
+
+interface CalendarHomeLike {
+  displayname?: string;
+  url: string;
+  findAllCalendars: () => Promise<Calendar[]>;
 }
 
 interface CalDavTaskData {
@@ -84,12 +80,51 @@ export class CaldavClientService {
     );
   }
 
-  private static _getCalendarUriFromUrl(url: string): string {
-    if (url.endsWith('/')) {
-      url = url.substring(0, url.length - 1);
-    }
+  private static _normalizeCalDavPath(value: string): string {
+    return value.replace(/\/+$/, '');
+  }
 
-    return url.substring(url.lastIndexOf('/') + 1);
+  private static _getCalendarUriFromUrl(url: string): string {
+    const normalizedUrl = CaldavClientService._normalizeCalDavPath(url);
+    return normalizedUrl.substring(normalizedUrl.lastIndexOf('/') + 1);
+  }
+
+  private static _isSameCalDavPath(a: string, b: string): boolean {
+    return (
+      CaldavClientService._normalizeCalDavPath(a) ===
+      CaldavClientService._normalizeCalDavPath(b)
+    );
+  }
+
+  private static _matchesCalendarDisplayName(
+    item: { displayname?: string },
+    resource: string,
+  ): boolean {
+    return item.displayname === resource;
+  }
+
+  private static _matchesCalendarUri(item: { url: string }, resource: string): boolean {
+    return CaldavClientService._getCalendarUriFromUrl(item.url) === resource;
+  }
+
+  private static _findMatchingCalendar(
+    calendars: Calendar[],
+    resource: string,
+    calendarHome: CalendarHomeLike,
+  ): Calendar | undefined {
+    const concreteCalendars = calendars.filter(
+      (item) => !CaldavClientService._isSameCalDavPath(item.url, calendarHome.url),
+    );
+    const displayNameMatch = concreteCalendars.find((item) =>
+      CaldavClientService._matchesCalendarDisplayName(item, resource),
+    );
+
+    return (
+      displayNameMatch ??
+      concreteCalendars.find((item) =>
+        CaldavClientService._matchesCalendarUri(item, resource),
+      )
+    );
   }
 
   private static async _getAllTodos(
@@ -224,6 +259,13 @@ export class CaldavClientService {
     return hash;
   }
 
+  private static _getResponseHeaderWithDavFallback(
+    name: string,
+    value: string | null,
+  ): string | null {
+    return value === null && name.toLowerCase() === 'dav' ? '' : value;
+  }
+
   async _get_client(cfg: CaldavCfg): Promise<ClientCache> {
     this._checkSettings(cfg);
 
@@ -261,19 +303,32 @@ export class CaldavClientService {
       return clientCache.calendars.get(resource);
     }
 
-    const calendars = await clientCache.client.calendarHomes[0]
-      .findAllCalendars()
-      .catch((err) => this._handleNetErr(err));
+    let lastCalendarHomeError: unknown;
 
-    const calendar = calendars.find(
-      (item: Calendar) =>
-        (item.displayname || CaldavClientService._getCalendarUriFromUrl(item.url)) ===
+    for (const calendarHome of clientCache.client.calendarHomes as CalendarHomeLike[]) {
+      const calendars = await calendarHome.findAllCalendars().catch((err: unknown) => {
+        lastCalendarHomeError = err;
+        return null;
+      });
+
+      if (!calendars) {
+        continue;
+      }
+
+      const calendar = CaldavClientService._findMatchingCalendar(
+        calendars,
         resource,
-    );
+        calendarHome,
+      );
 
-    if (calendar !== undefined) {
-      clientCache.calendars.set(resource, calendar);
-      return calendar;
+      if (calendar !== undefined) {
+        clientCache.calendars.set(resource, calendar);
+        return calendar;
+      }
+    }
+
+    if (lastCalendarHomeError) {
+      this._handleNetErr(lastCalendarHomeError);
     }
 
     this._snackService.open({
@@ -362,6 +417,7 @@ export class CaldavClientService {
     function xhrProvider(): XMLHttpRequest {
       const xhr = new XMLHttpRequest();
       const oldOpen = xhr.open;
+      const oldGetResponseHeader = xhr.getResponseHeader;
 
       // override open() method to add headers
 
@@ -376,6 +432,15 @@ export class CaldavClientService {
           'Basic ' + btoa(cfg.username + ':' + cfg.password),
         );
         return result;
+      };
+      xhr.getResponseHeader = function (
+        this: XMLHttpRequest,
+        name: string,
+      ): string | null {
+        return CaldavClientService._getResponseHeaderWithDavFallback(
+          name,
+          oldGetResponseHeader.call(this, name),
+        );
       };
       return xhr;
     }
@@ -459,7 +524,10 @@ export class CaldavClientService {
         },
 
         getResponseHeader: (name: string): string | null => {
-          return responseHeaders[name.toLowerCase()] ?? null;
+          return CaldavClientService._getResponseHeaderWithDavFallback(
+            name,
+            responseHeaders[name.toLowerCase()] ?? null,
+          );
         },
 
         getAllResponseHeaders: (): string => {

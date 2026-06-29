@@ -31,7 +31,9 @@ type ProjectServiceSignals = {
   list$: Observable<Project[]>;
   listSorted$: Observable<Project[]>;
   listSortedForUI$: Observable<Project[]>;
+  listInTreeOrderForUI$: Observable<Project[]>;
   listSortedForUI: Signal<Project[]>;
+  listInTreeOrderForUI: Signal<Project[]>;
   listSorted: Signal<Project[]>;
 };
 
@@ -39,9 +41,11 @@ type TagServiceSignals = {
   tags$: Observable<any[]>;
   tagsNoMyDayAndNoList$: Observable<any[]>;
   tagsNoMyDayAndNoListSorted$: Observable<any[]>;
+  tagsNoMyDayAndNoListInTreeOrder$: Observable<any[]>;
   tagsSortedForUI$: Observable<any[]>;
   tagsSorted$: Observable<any[]>;
   tagsNoMyDayAndNoListSorted: Signal<any[]>;
+  tagsNoMyDayAndNoListInTreeOrder: Signal<any[]>;
   tagsSorted: Signal<any[]>;
   tagsSortedForUI: Signal<any[]>;
 };
@@ -132,7 +136,9 @@ describe('AddTaskBarComponent', () => {
       list$: projects$,
       listSorted$: projects$,
       listSortedForUI$: projects$,
+      listInTreeOrderForUI$: projects$,
       listSortedForUI: signal(projects),
+      listInTreeOrderForUI: signal(projects),
       listSorted: signal(projects),
     };
   };
@@ -143,9 +149,11 @@ describe('AddTaskBarComponent', () => {
       tags$,
       tagsNoMyDayAndNoList$: tags$,
       tagsNoMyDayAndNoListSorted$: tags$,
+      tagsNoMyDayAndNoListInTreeOrder$: tags$,
       tagsSortedForUI$: tags$,
       tagsSorted$: tags$,
       tagsNoMyDayAndNoListSorted: signal(tags),
+      tagsNoMyDayAndNoListInTreeOrder: signal(tags),
       tagsSorted: signal(tags),
       tagsSortedForUI: signal(tags),
     };
@@ -369,6 +377,129 @@ describe('AddTaskBarComponent', () => {
       expect(addRepeatCfgSpy).toHaveBeenCalled();
       const repeatCfg = addRepeatCfgSpy.calls.mostRecent().args[2];
       expect(repeatCfg.startDate).toBe('2024-05-19');
+    });
+
+    it('should pass deadlineDay when a deadline date is set without a time', async () => {
+      mockTaskService.add.and.returnValue('task-1');
+
+      component.stateService.updateInputTxt('Buy milk');
+      component.stateService.updateCleanText('Buy milk');
+      component.stateService.updateDeadline('2026-06-15', null);
+
+      await component.addTask();
+
+      const taskData = mockTaskService.add.calls.mostRecent()
+        .args[2] as Partial<TaskCopy>;
+      expect(taskData.deadlineDay).toBe('2026-06-15');
+      expect(taskData.deadlineWithTime).toBeUndefined();
+    });
+
+    it('should pass deadlineWithTime and deadlineRemindAt when a deadline is set with a time and reminder', async () => {
+      mockTaskService.add.and.returnValue('task-1');
+
+      component.stateService.updateInputTxt('Dentist appointment');
+      component.stateService.updateCleanText('Dentist appointment');
+      component.stateService.updateDeadline('2026-06-15', '14:30');
+      component.stateService.updateDeadlineRemindOption(TaskReminderOptionId.AtStart);
+
+      await component.addTask();
+
+      const taskData = mockTaskService.add.calls.mostRecent()
+        .args[2] as Partial<TaskCopy>;
+      const expectedTimestamp = new Date(2026, 5, 15, 14, 30, 0, 0).getTime();
+      expect(taskData.deadlineWithTime).toBe(expectedTimestamp);
+      expect(taskData.deadlineRemindAt).toBe(expectedTimestamp);
+    });
+
+    it('should pass the trimmed note text as notes when a note is entered', async () => {
+      mockTaskService.add.and.returnValue('task-1');
+
+      component.stateService.updateInputTxt('Buy milk');
+      component.stateService.updateCleanText('Buy milk');
+      component.stateService.noteTxt.set('  remember the oat milk  ');
+
+      await component.addTask();
+
+      const taskData = mockTaskService.add.calls.mostRecent()
+        .args[2] as Partial<TaskCopy>;
+      expect(taskData.notes).toBe('remember the oat milk');
+    });
+
+    it('should not set notes when the note is empty or whitespace', async () => {
+      mockTaskService.add.and.returnValue('task-1');
+
+      component.stateService.updateInputTxt('Buy milk');
+      component.stateService.updateCleanText('Buy milk');
+      component.stateService.noteTxt.set('   ');
+
+      await component.addTask();
+
+      const taskData = mockTaskService.add.calls.mostRecent()
+        .args[2] as Partial<TaskCopy>;
+      expect(taskData.notes).toBeUndefined();
+    });
+  });
+
+  describe('note panel', () => {
+    it('toggleNote should flip the expanded state', () => {
+      // focusInput re-focuses the title input, which tries to open the
+      // autocomplete in the test harness — irrelevant to this assertion.
+      spyOn(component, 'focusInput');
+      expect(component.stateService.isNoteExpanded()).toBe(false);
+
+      component.toggleNote();
+      expect(component.stateService.isNoteExpanded()).toBe(true);
+
+      component.toggleNote();
+      expect(component.stateService.isNoteExpanded()).toBe(false);
+    });
+
+    it('Ctrl+Enter on the title input expands the note without adding a task', () => {
+      const addTaskSpy = spyOn(component, 'addTask');
+
+      component.onInputKeydown(
+        new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true }),
+      );
+
+      expect(component.stateService.isNoteExpanded()).toBe(true);
+      expect(addTaskSpy).not.toHaveBeenCalled();
+    });
+
+    it('Ctrl+Enter inside the note submits the task', () => {
+      const addTaskSpy = spyOn(component, 'addTask');
+
+      component.onNoteKeydown(
+        new KeyboardEvent('keydown', { key: 'Enter', metaKey: true }),
+      );
+
+      expect(addTaskSpy).toHaveBeenCalled();
+    });
+
+    it('Escape inside the note collapses it instead of submitting', () => {
+      const addTaskSpy = spyOn(component, 'addTask');
+      spyOn(component, 'focusInput');
+      component.stateService.isNoteExpanded.set(true);
+
+      component.onNoteKeydown(new KeyboardEvent('keydown', { key: 'Escape' }));
+
+      expect(component.stateService.isNoteExpanded()).toBe(false);
+      expect(addTaskSpy).not.toHaveBeenCalled();
+    });
+
+    it('typing in the note textarea writes back to noteTxt (two-way bind)', () => {
+      component.stateService.isNoteExpanded.set(true);
+      fixture.detectChanges();
+
+      const textarea = fixture.nativeElement.querySelector(
+        'textarea.note-input',
+      ) as HTMLTextAreaElement;
+      expect(textarea).toBeTruthy();
+
+      textarea.value = 'a multi\nline note';
+      textarea.dispatchEvent(new Event('input'));
+      fixture.detectChanges();
+
+      expect(component.stateService.noteTxt()).toBe('a multi\nline note');
     });
   });
 

@@ -32,6 +32,7 @@ import { idleDialogResult, triggerResetBreakTimer } from '../idle/store/idle.act
 import { playSound } from '../../util/play-sound';
 import { LOCAL_ACTIONS } from '../../util/local-actions.token';
 import { TimeSessionService } from '../time-session/time-session.service';
+import { SnackService } from '../../core/snack/snack.service';
 
 const BREAK_TRIGGER_DURATION = 10 * 60 * 1000;
 const PING_UPDATE_BANNER_INTERVAL = 60 * 1000;
@@ -62,6 +63,7 @@ export class TakeABreakService {
   private _bannerService = inject(BannerService);
   private _chromeExtensionInterfaceService = inject(ChromeExtensionInterfaceService);
   private _uiHelperService = inject(UiHelperService);
+  private _snackService = inject(SnackService);
 
   otherNoBreakTIme$ = new Subject<number>();
 
@@ -101,18 +103,18 @@ export class TakeABreakService {
     ),
     this._actions$.pipe(ofType(idleDialogResult)).pipe(
       switchMap(({ trackItems, isResetBreakTimer }) => {
-        if (trackItems.some((t) => t.type === 'BREAK')) {
+        // the dialog checkbox is the single source of truth for resetting; it
+        // auto-defaults to checked when a break is tracked, so an unchecked
+        // value means the user explicitly opted out of the reset
+        if (isResetBreakTimer) {
           return of(0);
         }
-        if ((trackItems.length === 0 || trackItems.length === 1) && !isResetBreakTimer) {
-          return EMPTY;
-        }
-        return of(
-          trackItems.reduce(
-            (acc, t) => acc + (typeof t.time === 'number' ? t.time : 0),
-            0,
-          ),
-        );
+        // without a reset, time tracked to tasks still counts as work; break
+        // items don't (but they don't reset the timer either)
+        const noBreakTime = trackItems
+          .filter((t) => t.type === 'TASK')
+          .reduce((acc, t) => acc + (typeof t.time === 'number' ? t.time : 0), 0);
+        return noBreakTime > 0 ? of(noBreakTime) : EMPTY;
       }),
     ),
     this.otherNoBreakTIme$,
@@ -291,7 +293,9 @@ export class TakeABreakService {
           time: msToString(cfg.takeABreak.takeABreakSnoozeTime),
         },
         action: {
-          label: T.F.FOCUS_MODE.START_BREAK,
+          // Not "Start break": this reminder has no break timer/screen, the
+          // button just pauses tracking — so label it for what it does.
+          label: T.F.TIME_TRACKING.B.PAUSE_AND_BREAK,
           fn: () => this.startBreak(),
         },
         action2: {
@@ -320,7 +324,15 @@ export class TakeABreakService {
   }
 
   startBreak(): void {
+    // This reminder isn't a timed-break feature: it just pauses tracking so the
+    // rest counts as a break, then resets the reminder. Show an encouraging
+    // snack so the click clearly does something instead of nothing.
     this._taskService.pauseCurrent();
+    this._snackService.open({
+      type: 'SUCCESS',
+      ico: 'free_breakfast',
+      msg: T.F.TIME_TRACKING.B.BREAK_SNACK,
+    });
     this.resetTimer();
   }
 

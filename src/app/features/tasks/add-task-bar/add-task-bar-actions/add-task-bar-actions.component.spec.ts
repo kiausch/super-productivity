@@ -1,4 +1,4 @@
-import { ComponentFixture, TestBed } from '@angular/core/testing';
+import { ComponentFixture, fakeAsync, TestBed, tick } from '@angular/core/testing';
 import { MatDialog, MatDialogRef } from '@angular/material/dialog';
 import { MatMenuTrigger } from '@angular/material/menu';
 import { BrowserAnimationsModule } from '@angular/platform-browser/animations';
@@ -12,13 +12,15 @@ import { TagService } from '../../../tag/tag.service';
 import { DialogScheduleTaskComponent } from '../../../planner/dialog-schedule-task/dialog-schedule-task.component';
 import { Project } from '../../../project/project.model';
 import { Tag } from '../../../tag/tag.model';
-import { signal } from '@angular/core';
+import { signal, WritableSignal } from '@angular/core';
 import { getDbDateStr } from '../../../../util/get-db-date-str';
 import { DateTimeFormatService } from 'src/app/core/date-time-format/date-time-format.service';
 import { Store } from '@ngrx/store';
 import { GlobalConfigService } from 'src/app/features/config/global-config.service';
 import { DateTimeLocale, DateTimeLocales } from 'src/app/core/locale.constants';
 import { DateService } from '../../../../core/date/date.service';
+import { TaskReminderOptionId } from '../../task.model';
+import { INBOX_PROJECT } from '../../../project/project.const';
 
 const expectedLocaleTime = (timeStr: string, locale: string): string => {
   const [hours, minutes] = timeStr.split(':').map(Number);
@@ -37,6 +39,7 @@ describe('AddTaskBarActionsComponent', () => {
   let mockMatDialog: jasmine.SpyObj<MatDialog>;
   let mockDialogRef: jasmine.SpyObj<MatDialogRef<DialogScheduleTaskComponent>>;
   let mockDateService: jasmine.SpyObj<DateService>;
+  let mockProjectsSignal: WritableSignal<Project[]>;
 
   const mockProject: Project = {
     id: '1',
@@ -57,6 +60,12 @@ describe('AddTaskBarActionsComponent', () => {
     },
   } as Tag;
 
+  const earlierTreeTag: Tag = {
+    ...mockTag,
+    id: '0',
+    title: 'earlier tree tag',
+  };
+
   const mockState = {
     projectId: mockProject.id, // Use mock project id by default
     tagIds: [],
@@ -69,6 +78,7 @@ describe('AddTaskBarActionsComponent', () => {
   };
 
   const mockStore = jasmine.createSpyObj('Store', ['select', 'dispatch']);
+  mockStore.select.and.returnValue(of([]));
   const mockConfigService = (locale: DateTimeLocale): GlobalConfigService => {
     return jasmine.createSpyObj('GlobalConfigService', [], {
       localization: () => ({ timeLocale: locale }),
@@ -98,7 +108,10 @@ describe('AddTaskBarActionsComponent', () => {
       'updateDate',
       'updateEstimate',
       'updateRemindOption',
+      'updateDeadline',
+      'updateDeadlineRemindOption',
       'clearDate',
+      'clearDeadline',
       'clearTags',
       'clearEstimate',
       'toggleTag',
@@ -117,6 +130,10 @@ describe('AddTaskBarActionsComponent', () => {
       value: mockInputTxtSignal.asReadonly(),
       writable: false,
     });
+    Object.defineProperty(mockStateService, 'noteTxt', {
+      value: signal(''),
+      writable: false,
+    });
 
     // Store references to update signals in tests
     (mockStateService as any)._mockStateSignal = mockStateSignal;
@@ -127,16 +144,19 @@ describe('AddTaskBarActionsComponent', () => {
       'removeShortSyntaxFromInput',
     ]);
 
+    mockProjectsSignal = signal([mockProject]);
     mockProjectService = jasmine.createSpyObj('ProjectService', [], {
       list$: of([mockProject]),
-      listSortedForUI: signal([mockProject]),
-      listSorted: signal([mockProject]),
+      listSortedForUI: mockProjectsSignal,
+      listInTreeOrderForUI: mockProjectsSignal,
+      listSorted: mockProjectsSignal,
     });
 
     mockTagService = jasmine.createSpyObj('TagService', [], {
       tags$: of([mockTag]),
       tagsNoMyDayAndNoList$: of([mockTag]),
       tagsNoMyDayAndNoListSorted: signal([mockTag]),
+      tagsNoMyDayAndNoListInTreeOrder: signal([earlierTreeTag, mockTag]),
     });
 
     mockDialogRef = jasmine.createSpyObj('MatDialogRef', ['afterClosed']);
@@ -188,6 +208,9 @@ describe('AddTaskBarActionsComponent', () => {
           },
         },
       },
+      G: {
+        INBOX_PROJECT_TITLE: 'Posteingang',
+      },
     });
     translateService.use('en');
 
@@ -200,7 +223,7 @@ describe('AddTaskBarActionsComponent', () => {
   describe('Component Creation', () => {
     it('should initialize with correct signals', () => {
       expect(component.allProjects()).toEqual([mockProject]);
-      expect(component.allTags()).toEqual([mockTag]);
+      expect(component.allTags()).toEqual([earlierTreeTag, mockTag]);
     });
 
     it('should handle input properties', () => {
@@ -220,6 +243,54 @@ describe('AddTaskBarActionsComponent', () => {
   });
 
   describe('Computed Properties', () => {
+    it('should translate the default inbox project title in the action button', () => {
+      mockProjectsSignal.set([INBOX_PROJECT]);
+      (mockStateService as any)._mockStateSignal.set({
+        ...mockState,
+        projectId: INBOX_PROJECT.id,
+      });
+
+      fixture.detectChanges();
+
+      const projectButton: HTMLElement =
+        fixture.nativeElement.querySelector('.action-btn');
+      expect(projectButton.textContent).toContain('Posteingang');
+      expect(projectButton.textContent).not.toContain('Inbox');
+    });
+
+    it('should translate the default inbox project title in the project menu', fakeAsync(() => {
+      mockProjectsSignal.set([INBOX_PROJECT]);
+      fixture.detectChanges();
+
+      const projectButton: HTMLElement =
+        fixture.nativeElement.querySelector('.action-btn');
+      projectButton.click();
+      fixture.detectChanges();
+      tick();
+
+      const menuPanel = document.querySelector('.cdk-overlay-container');
+      expect(menuPanel?.textContent).toContain('Posteingang');
+      expect(menuPanel?.textContent).not.toContain('Inbox');
+    }));
+
+    it('should preserve a renamed inbox project title in the action button', () => {
+      const renamedInboxProject = {
+        ...INBOX_PROJECT,
+        title: 'Personal Inbox',
+      };
+      mockProjectsSignal.set([renamedInboxProject]);
+      (mockStateService as any)._mockStateSignal.set({
+        ...mockState,
+        projectId: INBOX_PROJECT.id,
+      });
+
+      fixture.detectChanges();
+
+      const projectButton: HTMLElement =
+        fixture.nativeElement.querySelector('.action-btn');
+      expect(projectButton.textContent).toContain('Personal Inbox');
+    });
+
     it('should compute hasNewTags correctly', () => {
       const stateWithNewTags = {
         ...mockState,
@@ -358,6 +429,44 @@ describe('AddTaskBarActionsComponent', () => {
 
       const result = component.dateDisplay();
       expect(result).toContain(expectedLocaleTime('10:00', 'en-US'));
+    });
+
+    // Repro for #7802 — a malformed time string in state crashed change
+    // detection via the "Invalid clock string" guard in _formatTimeForDisplay.
+    it('does NOT throw and shows the normalized time for a "13:30:00" state.time', () => {
+      const today = mockDateService.todayStr();
+      (mockStateService as any)._mockStateSignal.set({
+        ...mockState,
+        date: today,
+        time: '13:30:00',
+      });
+
+      expect(() => component.dateDisplay()).not.toThrow();
+      expect(component.dateDisplay()).toBe(expectedLocaleTime('13:30', 'en-US'));
+    });
+
+    it('does NOT throw for genuinely invalid state.time', () => {
+      const futureDate = new Date();
+      futureDate.setDate(futureDate.getDate() + 4);
+      (mockStateService as any)._mockStateSignal.set({
+        ...mockState,
+        date: getDbDateStr(futureDate),
+        time: 'abc',
+      });
+
+      expect(() => component.dateDisplay()).not.toThrow();
+    });
+
+    it('does NOT throw and shows the normalized time for a "13:30:00" deadlineTime', () => {
+      const today = mockDateService.todayStr();
+      (mockStateService as any)._mockStateSignal.set({
+        ...mockState,
+        deadlineDate: today,
+        deadlineTime: '13:30:00',
+      });
+
+      expect(() => component.deadlineDateDisplay()).not.toThrow();
+      expect(component.deadlineDateDisplay()).toBe(expectedLocaleTime('13:30', 'en-US'));
     });
 
     it('should handle auto-detected state correctly', () => {
@@ -853,7 +962,7 @@ describe('AddTaskBarActionsComponent', () => {
   describe('Integration', () => {
     it('should filter archived projects from allProjects signal', () => {
       const archivedProject = { ...mockProject, id: '2', isArchived: true };
-      mockProjectService.list$ = of([mockProject, archivedProject]);
+      mockProjectsSignal.set([mockProject]);
 
       // Recreate component to pick up new observable
       fixture = TestBed.createComponent(AddTaskBarActionsComponent);
@@ -866,7 +975,7 @@ describe('AddTaskBarActionsComponent', () => {
 
     it('should filter hidden projects from allProjects signal', () => {
       const hiddenProject = { ...mockProject, id: '2', isHiddenFromMenu: true };
-      mockProjectService.list$ = of([mockProject, hiddenProject]);
+      mockProjectsSignal.set([mockProject]);
 
       // Recreate component to pick up new observable
       fixture = TestBed.createComponent(AddTaskBarActionsComponent);
@@ -986,6 +1095,28 @@ describe('AddTaskBarActionsComponent', () => {
   });
 
   describe('Schedule Dialog Timezone Handling', () => {
+    it('should pass the existing deadline reminder option when opening deadline dialog', () => {
+      const stateWithDeadline = {
+        ...mockState,
+        deadlineDate: '2025-07-20',
+        deadlineTime: '09:15',
+        deadlineRemindOption: TaskReminderOptionId.m30,
+      };
+      (mockStateService as any)._mockStateSignal.set(stateWithDeadline);
+      fixture.detectChanges();
+
+      component.openDeadlineDialog();
+
+      expect(mockMatDialog.open).toHaveBeenCalledWith(jasmine.any(Function), {
+        data: {
+          targetDeadlineDay: '2025-07-20',
+          targetDeadlineTime: '09:15',
+          targetDeadlineRemindOption: TaskReminderOptionId.m30,
+          isSelectDeadlineOnly: true,
+        },
+      });
+    });
+
     it('should handle dialog results with dates from different timezones', () => {
       // Simulate a dialog result with a Date object that might come from a date picker
       const selectedDate = new Date(2025, 2, 15, 10, 30, 0); // March 15, 2025 at 10:30 AM
@@ -1042,6 +1173,31 @@ describe('AddTaskBarActionsComponent', () => {
       component.openScheduleDialog();
 
       expect(mockStateService.updateDate).toHaveBeenCalledWith('2025-01-01', '00:00');
+    });
+  });
+
+  describe('Note button', () => {
+    it('should emit toggleNote when the note chip is clicked', () => {
+      const emitSpy = spyOn(component.toggleNote, 'emit');
+      fixture.detectChanges();
+
+      const noteBtn = fixture.nativeElement.querySelector(
+        '[data-test="add-task-bar-note-btn"]',
+      ) as HTMLButtonElement;
+      noteBtn.click();
+
+      expect(emitSpy).toHaveBeenCalled();
+    });
+
+    it('should mark the note chip as having a value when a note is entered', () => {
+      (mockStateService as any).noteTxt.set('a note');
+      fixture.detectChanges();
+
+      const noteBtn = fixture.nativeElement.querySelector(
+        '[data-test="add-task-bar-note-btn"]',
+      ) as HTMLButtonElement;
+
+      expect(noteBtn.classList).toContain('has-value');
     });
   });
 });

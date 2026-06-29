@@ -22,12 +22,12 @@ import { getWeekNumber } from '../../util/get-week-number';
 import { WorkContextService } from '../work-context/work-context.service';
 import { WorkContext } from '../work-context/work-context.model';
 import { mapArchiveToWorklog } from './util/map-archive-to-worklog';
+import { mapArchiveToWorklogWeeks } from './util/map-archive-to-worklog-weeks';
 import { TaskService } from '../tasks/task.service';
 import { createEmptyEntity } from '../../util/create-empty-entity';
 import { getCompleteStateForWorkContext } from './util/get-complete-state-for-work-context.util';
 import { NavigationEnd, Router } from '@angular/router';
 import { WorklogTask } from '../tasks/task.model';
-import { mapArchiveToWorklogWeeks } from './util/map-archive-to-worklog-weeks';
 import { DateAdapter } from '@angular/material/core';
 import { DataInitStateService } from '../../core/data-init/data-init-state.service';
 import { TimeSessionService } from '../time-session/time-session.service';
@@ -60,9 +60,10 @@ export class WorklogService {
             filter((event: any) => event instanceof NavigationEnd),
             filter(
               ({ urlAfterRedirects }: NavigationEnd) =>
+                // 'history' also matches the legacy 'quick-history' substring
+                urlAfterRedirects.includes('history') ||
                 urlAfterRedirects.includes('worklog') ||
                 urlAfterRedirects.includes('daily-summary') ||
-                urlAfterRedirects.includes('quick-history') ||
                 urlAfterRedirects.includes('metrics'),
             ),
           ),
@@ -100,33 +101,6 @@ export class WorklogService {
     shareReplay({ bufferSize: 1, refCount: true }),
   );
 
-  _worklogDataIfDefined$: Observable<{
-    worklog: Worklog;
-    totalTimeSpent: number;
-  }> = this.worklogData$.pipe(filter((wd) => !!wd));
-
-  worklog$: Observable<Worklog> = this._worklogDataIfDefined$.pipe(
-    map((data) => data.worklog),
-  );
-  totalTimeSpent$: Observable<number> = this._worklogDataIfDefined$.pipe(
-    map((data) => data.totalTimeSpent),
-  );
-  currentWeek$: Observable<WorklogWeek | null> = this.worklog$.pipe(
-    map((worklog) => {
-      const now = new Date();
-      const year = now.getFullYear();
-      const month = now.getMonth() + 1;
-      const weekNr = getWeekNumber(now);
-
-      if (worklog[year] && worklog[year].ent[month]) {
-        return (
-          worklog[year].ent[month].weeks.find((week) => week.weekNr === weekNr) || null
-        );
-      }
-      return null;
-    }),
-  );
-
   _quickHistoryData$: Observable<WorklogYearsWithWeeks | null> =
     this._archiveUpdateTrigger$.pipe(
       switchMap(() =>
@@ -158,6 +132,33 @@ export class WorklogService {
         return worklogYearsWithWeeks[year].filter((v) => !!v).reverse();
       }),
     );
+
+  _worklogDataIfDefined$: Observable<{
+    worklog: Worklog;
+    totalTimeSpent: number;
+  }> = this.worklogData$.pipe(filter((wd) => !!wd));
+
+  worklog$: Observable<Worklog> = this._worklogDataIfDefined$.pipe(
+    map((data) => data.worklog),
+  );
+  totalTimeSpent$: Observable<number> = this._worklogDataIfDefined$.pipe(
+    map((data) => data.totalTimeSpent),
+  );
+  currentWeek$: Observable<WorklogWeek | null> = this.worklog$.pipe(
+    map((worklog) => {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = now.getMonth() + 1;
+      const weekNr = getWeekNumber(now);
+
+      if (worklog[year] && worklog[year].ent[month]) {
+        return (
+          worklog[year].ent[month].weeks.find((week) => week.weekNr === weekNr) || null
+        );
+      }
+      return null;
+    }),
+  );
 
   worklogTasks$: Observable<WorklogTask[]> = this.worklog$.pipe(
     map((worklog) => {

@@ -15,7 +15,6 @@ import { TaskAttachment } from '../tasks/task-attachment/task-attachment.model';
 import { firstValueFrom, forkJoin, from, merge, Observable, of, Subject } from 'rxjs';
 import {
   CALDAV_TYPE,
-  GITEA_TYPE,
   GITLAB_TYPE,
   ICAL_TYPE,
   ISSUE_PROVIDER_HUMANIZED,
@@ -24,28 +23,27 @@ import {
   DEFAULT_ISSUE_STRS,
   JIRA_TYPE,
   OPEN_PROJECT_TYPE,
-  TRELLO_TYPE,
   REDMINE_TYPE,
-  LINEAR_TYPE,
-  AZURE_DEVOPS_TYPE,
   NEXTCLOUD_DECK_TYPE,
+  PLAINSPACE_TYPE,
 } from './issue.const';
 import { TaskService } from '../tasks/task.service';
-import { IssueTask, Task, TaskCopy } from '../tasks/task.model';
+import { IssueTask, Task, TaskCopy, TaskWithSubTasks } from '../tasks/task.model';
 import { IssueServiceInterface } from './issue-service-interface';
 import { JiraCommonInterfacesService } from './providers/jira/jira-common-interfaces.service';
-import { TrelloCommonInterfacesService } from './providers/trello/trello-common-interfaces.service';
+// Trello is now a plugin — no built-in service needed
 import { catchError, map, switchMap } from 'rxjs/operators';
 import { IssueLog } from '../../core/log';
 import { GitlabCommonInterfacesService } from './providers/gitlab/gitlab-common-interfaces.service';
 import { CaldavCommonInterfacesService } from './providers/caldav/caldav-common-interfaces.service';
 import { OpenProjectCommonInterfacesService } from './providers/open-project/open-project-common-interfaces.service';
-import { GiteaCommonInterfacesService } from './providers/gitea/gitea-common-interfaces.service';
+// Gitea is now a plugin — no built-in service needed
 import { RedmineCommonInterfacesService } from './providers/redmine/redmine-common-interfaces.service';
-import { LinearCommonInterfacesService } from './providers/linear/linear-common-interfaces.service';
+// Linear is now a plugin — no built-in service needed
 // ClickUp is now a plugin — no built-in service needed
-import { AzureDevOpsCommonInterfacesService } from './providers/azure-devops/azure-devops-common-interfaces.service';
+// Azure DevOps is now a plugin — no built-in service needed
 import { NextcloudDeckCommonInterfacesService } from './providers/nextcloud-deck/nextcloud-deck-common-interfaces.service';
+import { PlainspaceCommonInterfacesService } from './providers/plainspace/plainspace-common-interfaces.service';
 import { SnackService } from '../../core/snack/snack.service';
 import { T } from '../../t.const';
 import { TranslateService } from '@ngx-translate/core';
@@ -75,17 +73,14 @@ import { PluginIssueProviderRegistryService } from '../../plugins/issue-provider
 export class IssueService {
   private _taskService = inject(TaskService);
   private _jiraCommonInterfacesService = inject(JiraCommonInterfacesService);
-  private _trelloCommonInterfacesService = inject(TrelloCommonInterfacesService);
   private _gitlabCommonInterfacesService = inject(GitlabCommonInterfacesService);
   private _caldavCommonInterfaceService = inject(CaldavCommonInterfacesService);
   private _openProjectInterfaceService = inject(OpenProjectCommonInterfacesService);
-  private _giteaInterfaceService = inject(GiteaCommonInterfacesService);
   private _redmineInterfaceService = inject(RedmineCommonInterfacesService);
-  private _linearCommonInterfaceService = inject(LinearCommonInterfacesService);
-  private _azureDevOpsCommonInterfaceService = inject(AzureDevOpsCommonInterfacesService);
   private _nextcloudDeckCommonInterfaceService = inject(
     NextcloudDeckCommonInterfacesService,
   );
+  private _plainspaceCommonInterfaceService = inject(PlainspaceCommonInterfacesService);
   private _calendarCommonInterfaceService = inject(CalendarCommonInterfacesService);
   private _issueProviderService = inject(IssueProviderService);
   private _workContextService = inject(WorkContextService);
@@ -104,15 +99,10 @@ export class IssueService {
     [JIRA_TYPE]: this._jiraCommonInterfacesService,
     [CALDAV_TYPE]: this._caldavCommonInterfaceService,
     [OPEN_PROJECT_TYPE]: this._openProjectInterfaceService,
-    [GITEA_TYPE]: this._giteaInterfaceService,
     [REDMINE_TYPE]: this._redmineInterfaceService,
     [ICAL_TYPE]: this._calendarCommonInterfaceService,
-    [LINEAR_TYPE]: this._linearCommonInterfaceService,
-    [AZURE_DEVOPS_TYPE]: this._azureDevOpsCommonInterfaceService,
     [NEXTCLOUD_DECK_TYPE]: this._nextcloudDeckCommonInterfaceService,
-
-    // trello
-    [TRELLO_TYPE]: this._trelloCommonInterfacesService,
+    [PLAINSPACE_TYPE]: this._plainspaceCommonInterfaceService,
   };
 
   ISSUE_REFRESH_MAP: {
@@ -406,16 +396,18 @@ export class IssueService {
         labelParams: pollingLabelParams,
       });
 
+      const service = this._getService(providerKey);
+      if (!service) {
+        this._globalProgressBarService.countDown();
+        continue;
+      }
+
       let updates: {
         task: Task;
         taskChanges: Partial<Task>;
         issue: IssueData;
       }[] = [];
       try {
-        const service = this._getService(providerKey);
-        if (!service) {
-          continue;
-        }
         updates = await service.getFreshDataForIssueTasks(
           tasksIssueIdsByIssueProviderKey[providerKey],
         );
@@ -459,11 +451,81 @@ export class IssueService {
           });
         }
       }
+
+      if (service.getRemovedRemoteTasks) {
+        await this._removeOrphanedRemoteTasks(
+          service,
+          tasksIssueIdsByIssueProviderKey[providerKey],
+        );
+      }
     }
 
     for (const taskWithoutIssueId of tasksWithoutIssueId) {
       throw new Error('No issue task ' + taskWithoutIssueId.id);
     }
+  }
+
+  /**
+   * Removes local tasks that are gone from the provider (deleted or reassigned
+   * away), but only when nothing has been invested in them locally. Failures are
+   * logged and swallowed so a detection hiccup never aborts the rest of the poll.
+   */
+  private async _removeOrphanedRemoteTasks(
+    service: IssueServiceInterface,
+    tasks: Task[],
+  ): Promise<void> {
+    try {
+      const orphaned = await service.getRemovedRemoteTasks!(tasks);
+      const removable = orphaned.filter((task) => !this._hasLocalContent(task));
+      if (removable.length === 0) {
+        return;
+      }
+      // The deleteTask effect that mirrors deletions back to the provider no-ops
+      // here (Plainspace has no deleteIssue adapter) — which is also why removing
+      // a reassigned task never deletes the still-living remote item. Each device
+      // polls independently and the delete op is idempotent, so a concurrent
+      // same-task delete on another device is harmless. Tasks are childless by
+      // the _hasLocalContent guard, so an empty subTasks list is accurate.
+      if (removable.length === 1) {
+        // Single-task path keeps the built-in deleteTask UNDO snackbar.
+        this._taskService.remove({
+          ...removable[0],
+          subTasks: [],
+        } as TaskWithSubTasks);
+      } else {
+        // A bulk vanish (e.g. many reassigned at once) collapses to ONE deleteTasks
+        // op instead of N rapid deleteTask dispatches (sync rule #3: one
+        // reconciliation = one op). The bulk path has no per-task undo snackbar.
+        this._taskService.removeMultipleTasks(removable.map((task) => task.id));
+      }
+    } catch (e) {
+      // Never log the raw error object — it may be an HttpErrorResponse whose
+      // url/body carry the issue id or task content, and the log is exportable.
+      IssueLog.err(
+        'Failed to remove orphaned issue tasks',
+        e instanceof Error ? e : String(e),
+      );
+    }
+  }
+
+  /**
+   * Whether the task holds local work or a completion record that removal would
+   * lose. Time tracking is the headline case; notes, sub-tasks, attachments and a
+   * local repeat config all count. `isDone` is kept too: a finished task is a
+   * record worth preserving, it covers "reassigned away after I completed it",
+   * and it decouples removal from the server keeping done items in its list.
+   * Deliberately excluded: dueDay/dueWithTime and tagIds are seeded by the import
+   * itself, so every imported task has them.
+   */
+  private _hasLocalContent(task: Task): boolean {
+    return (
+      task.timeSpent > 0 ||
+      (task.subTaskIds?.length ?? 0) > 0 ||
+      !!task.notes ||
+      (task.attachments?.length ?? 0) > 0 ||
+      !!task.repeatCfgId ||
+      task.isDone
+    );
   }
 
   async addTaskFromIssue({
@@ -665,7 +727,7 @@ export class IssueService {
         const subTaskData = this._getAddTaskData(issueProviderKey, subtask);
         const { title: subTaskTitle, ...subTaskAdditional } = subTaskData;
 
-        await this._taskService.addSubTaskTo(parentTaskId, {
+        this._taskService.addSubTaskTo(parentTaskId, {
           title: subTaskTitle,
           issueType: issueProviderKey,
           issueProviderId: issueProviderId,
@@ -714,7 +776,7 @@ export class IssueService {
     // sub-task (has a parentId), attach to its root parent so the new task
     // becomes a sibling of the parent rather than a grandchild.
     const effectiveParentId = parentTask.task.parentId || parentTask.task.id;
-    const taskId = await this._taskService.addSubTaskTo(effectiveParentId, subTaskData);
+    const taskId = this._taskService.addSubTaskTo(effectiveParentId, subTaskData);
     return { taskId, parentTaskId: effectiveParentId };
   }
 

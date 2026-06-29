@@ -28,12 +28,13 @@ const makeCalendarScheduleEvent = (isReferenceCalendar: boolean): ScheduleEvent 
   } as any,
 });
 
-const makeTaskScheduleEvent = (): ScheduleEvent => ({
+const makeTaskScheduleEvent = (overlap?: ScheduleEvent['overlap']): ScheduleEvent => ({
   id: 'task-1',
   type: SVEType.Task,
-  style: '',
+  style: 'grid-column: 2;  grid-row: 121 / span 12',
   startHours: 10,
   timeLeftInHours: 1,
+  overlap,
   data: { id: 'task-1', title: 'Task', timeEstimate: 3600000 } as any,
 });
 
@@ -56,13 +57,15 @@ describe('ScheduleEventComponent – isReferenceCalendar', () => {
           useValue: {
             hasEventUrl: jasmine.createSpy('hasEventUrl').and.returnValue(false),
             isPluginEvent: jasmine.createSpy('isPluginEvent').and.returnValue(false),
+            canMoveEvent: jasmine.createSpy('canMoveEvent').and.returnValue(false),
             createAsTask: jasmine.createSpy('createAsTask'),
             hideForever: jasmine.createSpy('hideForever'),
           },
         },
         {
           provide: DateTimeFormatService,
-          useValue: { is24HourFormat: true },
+          // is24HourFormat is a signal (a function); the component must call it.
+          useValue: { is24HourFormat: () => true },
         },
       ],
       schemas: [NO_ERRORS_SCHEMA],
@@ -92,6 +95,26 @@ describe('ScheduleEventComponent – isReferenceCalendar', () => {
       fixture.detectChanges();
 
       expect(component.isReferenceCalendar()).toBe(false);
+    });
+  });
+
+  describe('canRescheduleCalendarEvent signal', () => {
+    it('should return false when the calendar provider cannot update events', () => {
+      fixture.componentRef.setInput('event', makeCalendarScheduleEvent(false));
+      fixture.detectChanges();
+
+      expect(component.canRescheduleCalendarEvent()).toBe(false);
+    });
+
+    it('should return true when the calendar provider can update events', () => {
+      const calActions = TestBed.inject(
+        CalendarEventActionsService,
+      ) as jasmine.SpyObj<CalendarEventActionsService>;
+      calActions.canMoveEvent.and.returnValue(true);
+      fixture.componentRef.setInput('event', makeCalendarScheduleEvent(false));
+      fixture.detectChanges();
+
+      expect(component.canRescheduleCalendarEvent()).toBe(true);
     });
   });
 
@@ -144,6 +167,84 @@ describe('ScheduleEventComponent – isReferenceCalendar', () => {
       fixture.detectChanges();
 
       expect(component.isResizable()).toBe(false);
+    });
+  });
+
+  describe('style', () => {
+    it('should render overlapping events in equal-width lanes', () => {
+      fixture.componentRef.setInput(
+        'event',
+        makeTaskScheduleEvent({ count: 2, offset: 1 }),
+      );
+      fixture.detectChanges();
+
+      expect(component.style()).toBe(
+        'margin-left: calc(50% + var(--margin-left)); ' +
+          'width: calc(50% - var(--margin-left) - var(--margin-right)); ' +
+          'overflow: hidden !important; ' +
+          'grid-column: 2;  grid-row: 121 / span 12',
+      );
+    });
+
+    it('should not lane events in month view', () => {
+      fixture.componentRef.setInput(
+        'event',
+        makeTaskScheduleEvent({ count: 2, offset: 1 }),
+      );
+      fixture.componentRef.setInput('isMonthView', true);
+      fixture.detectChanges();
+
+      expect(component.style()).toBe('grid-column: 2;  grid-row: 121 / span 12');
+    });
+  });
+
+  describe('scheduledClockStr 12/24-hour folding (#8565)', () => {
+    // is24HourFormat is a signal; calling it (vs. negating the function ref,
+    // which is always truthy) is what makes 12h locales fold 14:00 → 2:00.
+    const setupWith24h = async (is24Hour: boolean): Promise<ScheduleEventComponent> => {
+      TestBed.resetTestingModule();
+      await TestBed.configureTestingModule({
+        imports: [ScheduleEventComponent, DragDropModule, TranslateModule.forRoot()],
+        providers: [
+          provideMockStore(),
+          { provide: MatDialog, useValue: { open: jasmine.createSpy('open') } },
+          {
+            provide: TaskService,
+            useValue: { setSelectedId: jasmine.createSpy('setSelectedId') },
+          },
+          {
+            provide: CalendarEventActionsService,
+            useValue: {
+              hasEventUrl: jasmine.createSpy('hasEventUrl').and.returnValue(false),
+              isPluginEvent: jasmine.createSpy('isPluginEvent').and.returnValue(false),
+              canMoveEvent: jasmine.createSpy('canMoveEvent').and.returnValue(false),
+              createAsTask: jasmine.createSpy('createAsTask'),
+              hideForever: jasmine.createSpy('hideForever'),
+            },
+          },
+          {
+            provide: DateTimeFormatService,
+            useValue: { is24HourFormat: () => is24Hour },
+          },
+        ],
+        schemas: [NO_ERRORS_SCHEMA],
+      }).compileComponents();
+
+      const f = TestBed.createComponent(ScheduleEventComponent);
+      const event = { ...makeTaskScheduleEvent(), startHours: 14 };
+      f.componentRef.setInput('event', event);
+      f.detectChanges();
+      return f.componentInstance;
+    };
+
+    it('keeps 24-hour time for a 24h locale', async () => {
+      const c = await setupWith24h(true);
+      expect(c.scheduledClockStr()).toBe('14:00');
+    });
+
+    it('folds to 12-hour time for a 12h locale', async () => {
+      const c = await setupWith24h(false);
+      expect(c.scheduledClockStr()).toBe('2:00');
     });
   });
 });

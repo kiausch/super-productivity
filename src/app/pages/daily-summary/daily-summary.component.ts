@@ -63,7 +63,9 @@ import { WorkContextType } from '../../features/work-context/work-context.model'
 import { WorkContextService } from '../../features/work-context/work-context.service';
 import { WorklogWeekComponent } from '../../features/worklog/worklog-week/worklog-week.component';
 import { WorklogService } from '../../features/worklog/worklog.service';
+import { SYNC_WAIT_TIMEOUT_MS } from '../../imex/sync/sync.const';
 import { SyncWrapperService } from '../../imex/sync/sync-wrapper.service';
+import { OperationWriteFlushService } from '../../op-log/sync/operation-write-flush.service';
 import { T } from '../../t.const';
 import { expandAnimation } from '../../ui/animations/expand.ani';
 import { DialogConfirmComponent } from '../../ui/dialog-confirm/dialog-confirm.component';
@@ -85,6 +87,9 @@ import { isWithinYesterdayMargin } from './is-include-yesterday.util';
 import { DailyWorklogTableComponent } from './daily-worklog-table/daily-worklog-table.component';
 import { TimeSessionService } from '../../features/time-session/time-session.service';
 import { BREAK_TASK_ID } from '../../features/time-session/time-session.model';
+
+const FINISH_DAY_SYNC_WAIT_TIMEOUT_MS = 30000;
+export const FINISH_DAY_FINAL_SYNC_TIMEOUT_MS = SYNC_WAIT_TIMEOUT_MS;
 
 @Component({
   selector: 'daily-summary',
@@ -130,6 +135,7 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
   private readonly _worklogService = inject(WorklogService);
   private readonly _activatedRoute = inject(ActivatedRoute);
   private readonly _syncWrapperService = inject(SyncWrapperService);
+  private readonly _operationWriteFlushService = inject(OperationWriteFlushService);
   private readonly _beforeFinishDayService = inject(BeforeFinishDayService);
   private readonly _simpleCounterService = inject(SimpleCounterService);
   private readonly _dateService = inject(DateService);
@@ -360,7 +366,7 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
       // Wait for any ongoing sync to complete before archiving to avoid DB lock errors.
       // Use a 30-second timeout to prevent hanging indefinitely if sync is stuck.
       await this._syncWrapperService.afterCurrentSyncDoneOrSyncDisabled$
-        .pipe(first(), timeout(30000))
+        .pipe(first(), timeout(FINISH_DAY_SYNC_WAIT_TIMEOUT_MS))
         .toPromise()
         .catch((err) => {
           // Log timeout but continue - better to proceed than to block the user
@@ -447,7 +453,6 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
     Log.log('[DailySummary] Moving done tasks to archive:', {
       count: doneTasks.length,
       taskIds: doneTasks.map((t) => t.id),
-      tasks: doneTasks,
     });
 
     if (doneTasks.length === 0) {
@@ -479,11 +484,45 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
   private async _finishDayForGood(cb?: () => void): Promise<void> {
     const cfg = this.configService.cfg();
     const syncCfg = cfg?.sync;
-    if (syncCfg?.isEnabled) {
-      await this._syncWrapperService.sync();
+    let isLocalStateFlushed = false;
+    try {
+      await this._operationWriteFlushService.flushPendingWrites();
+      isLocalStateFlushed = true;
+      if (syncCfg?.isEnabled) {
+        await this._runFinalSyncBeforeFinishDay();
+      }
+    } catch (err) {
+      Log.warn(
+        '[DailySummary] Final persistence or sync before finishing day failed:',
+        err,
+      );
+      this._snackService.open({
+        msg: T.F.SYNC.S.FINISH_DAY_SYNC_ERROR,
+        type: 'ERROR',
+      });
+    } finally {
+      if (isLocalStateFlushed && cb) {
+        cb();
+      }
     }
-    if (cb) {
-      cb();
+  }
+
+  private async _runFinalSyncBeforeFinishDay(): Promise<void> {
+    let syncTimeoutId: number | undefined;
+    try {
+      await Promise.race([
+        this._syncWrapperService.sync(),
+        new Promise<never>((_, reject) => {
+          syncTimeoutId = window.setTimeout(
+            () => reject(new Error('Finish day final sync timed out')),
+            FINISH_DAY_FINAL_SYNC_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } finally {
+      if (syncTimeoutId !== undefined) {
+        window.clearTimeout(syncTimeoutId);
+      }
     }
   }
 
@@ -588,7 +627,7 @@ export class DailySummaryComponent implements OnInit, OnDestroy, AfterViewInit {
             flatTasks.push(pt);
             flatTasks = flatTasks.concat(subTasks);
           }
-        } else if (_isWorkedOnDoneOrDueToday(pt) || pt.repeatCfgId) {
+        } else if (_isWorkedOnDoneOrDueToday(pt)) {
           flatTasks.push(pt);
         }
       });

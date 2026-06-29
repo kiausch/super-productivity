@@ -47,7 +47,7 @@ export interface DownloadResultBase {
   allOpClocks?: VectorClock[];
   /**
    * Aggregated vector clock from all ops before and including the snapshot.
-   * Only set when snapshot optimization is used (sinceSeq < latestSnapshotSeq).
+   * Only set when snapshot optimization is used.
    * Clients need this to create merged updates that dominate all known clocks.
    */
   snapshotVectorClock?: VectorClock;
@@ -139,6 +139,18 @@ export interface UploadResult {
    * Callers should skip post-upload logic (LWW re-upload, IN_SYNC status).
    */
   cancelled?: boolean;
+  /**
+   * The lastServerSeq value the caller must persist via setLastServerSeq AFTER it has
+   * applied the piggybacked ops (processRemoteOps). Only set when piggybacked ops were
+   * collected for the caller to apply; undefined otherwise (the upload service persisted
+   * the seq itself, since advancing past our own uploaded ops carries no loss risk).
+   *
+   * Deferring the persist mirrors the download path's invariant ("persist lastServerSeq
+   * AFTER ops are stored"): if a crash or a cancelled SYNC_IMPORT dialog occurs between
+   * upload return and processRemoteOps, the seq must NOT have advanced past those ops,
+   * or the next download skips them forever. (#8304)
+   */
+  lastServerSeqToPersist?: number;
 }
 
 /**

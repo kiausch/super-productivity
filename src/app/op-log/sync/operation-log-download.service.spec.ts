@@ -112,6 +112,90 @@ describe('OperationLogDownloadService', () => {
         expect(mockApiProvider.downloadOps).toHaveBeenCalled();
       });
 
+      describe('encrypted ops with no key — log severity (Fix B)', () => {
+        const NO_KEY_MSG = /no encryption key is configured/;
+
+        const setupEncryptedNoKeyDownload = (): void => {
+          // No getEncryptKey on the provider → encryptKey resolves to undefined.
+          mockApiProvider.downloadOps.and.returnValue(
+            Promise.resolve({
+              ops: [
+                {
+                  serverSeq: 1,
+                  receivedAt: Date.now(),
+                  op: {
+                    id: 'op-encrypted',
+                    clientId: 'c1',
+                    actionType: '[Task] Add' as ActionType,
+                    opType: OpType.Create,
+                    entityType: 'TASK',
+                    payload: 'encrypted-payload-string',
+                    isPayloadEncrypted: true,
+                    vectorClock: {},
+                    timestamp: Date.now(),
+                    schemaVersion: 1,
+                  },
+                },
+              ],
+              hasMore: false,
+              latestSeq: 1,
+            }),
+          );
+        };
+
+        it('logs quietly (normal, not error) for a never-synced client', async () => {
+          const errSpy = spyOn(OpLog, 'error');
+          mockOpLogStore.hasSyncedOps.and.returnValue(Promise.resolve(false));
+          setupEncryptedNoKeyDownload();
+
+          try {
+            await service.downloadRemoteOps(mockApiProvider);
+          } catch {
+            // DecryptNoPasswordError is expected — it triggers the password prompt.
+          }
+
+          expect(OpLog.normal).toHaveBeenCalledWith(jasmine.stringMatching(NO_KEY_MSG));
+          expect(errSpy).not.toHaveBeenCalledWith(jasmine.stringMatching(NO_KEY_MSG));
+        });
+
+        it('logs loudly (error) for an already-synced client (dropped-credential signature)', async () => {
+          const errSpy = spyOn(OpLog, 'error');
+          mockOpLogStore.hasSyncedOps.and.returnValue(Promise.resolve(true));
+          setupEncryptedNoKeyDownload();
+
+          try {
+            await service.downloadRemoteOps(mockApiProvider);
+          } catch {
+            // expected
+          }
+
+          expect(errSpy).toHaveBeenCalledWith(jasmine.stringMatching(NO_KEY_MSG));
+          expect(OpLog.normal).not.toHaveBeenCalledWith(
+            jasmine.stringMatching(NO_KEY_MSG),
+          );
+        });
+
+        it('logs loudly (error) for a never-synced client whose local config still flags encryption on (wiped-store dropped-credential)', async () => {
+          const errSpy = spyOn(OpLog, 'error');
+          mockOpLogStore.hasSyncedOps.and.returnValue(Promise.resolve(false));
+          mockApiProvider.isEncryptionEnabled = jasmine
+            .createSpy('isEncryptionEnabled')
+            .and.returnValue(Promise.resolve(true));
+          setupEncryptedNoKeyDownload();
+
+          try {
+            await service.downloadRemoteOps(mockApiProvider);
+          } catch {
+            // expected
+          }
+
+          expect(errSpy).toHaveBeenCalledWith(jasmine.stringMatching(NO_KEY_MSG));
+          expect(OpLog.normal).not.toHaveBeenCalledWith(
+            jasmine.stringMatching(NO_KEY_MSG),
+          );
+        });
+      });
+
       it('should detect and warn about clock drift after retry', fakeAsync(() => {
         const driftMs = CLOCK_DRIFT_THRESHOLD_MS + 60000; // Threshold + 1 min
         const initialTime = Date.now();
@@ -395,6 +479,141 @@ describe('OperationLogDownloadService', () => {
             direction: 'client ahead',
           }),
         );
+      }));
+
+      it('should clear a pending clock drift retry when a newer check supersedes it', fakeAsync(() => {
+        const driftMs = CLOCK_DRIFT_THRESHOLD_MS + 60000;
+        const initialTime = Date.now();
+        const staleDriftedServerTime = initialTime - driftMs;
+        spyOn(Date, 'now').and.returnValue(initialTime);
+
+        mockApiProvider.downloadOps.and.returnValues(
+          Promise.resolve({
+            ops: [
+              {
+                serverSeq: 1,
+                receivedAt: staleDriftedServerTime,
+                op: {
+                  id: 'op-1',
+                  clientId: 'c1',
+                  actionType: '[Task] Add' as ActionType,
+                  opType: OpType.Create,
+                  entityType: 'TASK',
+                  payload: {},
+                  vectorClock: {},
+                  timestamp: initialTime,
+                  schemaVersion: 1,
+                },
+              },
+            ],
+            hasMore: false,
+            latestSeq: 1,
+            serverTime: staleDriftedServerTime,
+          }),
+          Promise.resolve({
+            ops: [
+              {
+                serverSeq: 2,
+                receivedAt: initialTime,
+                op: {
+                  id: 'op-2',
+                  clientId: 'c1',
+                  actionType: '[Task] Update' as ActionType,
+                  opType: OpType.Update,
+                  entityType: 'TASK',
+                  payload: {},
+                  vectorClock: {},
+                  timestamp: initialTime,
+                  schemaVersion: 1,
+                },
+              },
+            ],
+            hasMore: false,
+            latestSeq: 2,
+            serverTime: initialTime,
+          }),
+        );
+
+        service.downloadRemoteOps(mockApiProvider);
+        tick();
+        service.downloadRemoteOps(mockApiProvider);
+        tick();
+        flush();
+
+        expect(OpLog.warn).not.toHaveBeenCalled();
+        expect(mockSnackService.open).not.toHaveBeenCalled();
+      }));
+
+      it('should not postpone a pending clock drift retry when drift persists', fakeAsync(() => {
+        const driftMs = CLOCK_DRIFT_THRESHOLD_MS + 60000;
+        const initialTime = Date.now();
+        const firstServerTime = initialTime - driftMs;
+        const secondServerTime = initialTime - driftMs - 1000;
+        spyOn(Date, 'now').and.returnValue(initialTime);
+
+        mockApiProvider.downloadOps.and.returnValues(
+          Promise.resolve({
+            ops: [
+              {
+                serverSeq: 1,
+                receivedAt: firstServerTime,
+                op: {
+                  id: 'op-1',
+                  clientId: 'c1',
+                  actionType: '[Task] Add' as ActionType,
+                  opType: OpType.Create,
+                  entityType: 'TASK',
+                  payload: {},
+                  vectorClock: {},
+                  timestamp: initialTime,
+                  schemaVersion: 1,
+                },
+              },
+            ],
+            hasMore: false,
+            latestSeq: 1,
+            serverTime: firstServerTime,
+          }),
+          Promise.resolve({
+            ops: [
+              {
+                serverSeq: 2,
+                receivedAt: secondServerTime,
+                op: {
+                  id: 'op-2',
+                  clientId: 'c1',
+                  actionType: '[Task] Update' as ActionType,
+                  opType: OpType.Update,
+                  entityType: 'TASK',
+                  payload: {},
+                  vectorClock: {},
+                  timestamp: initialTime,
+                  schemaVersion: 1,
+                },
+              },
+            ],
+            hasMore: false,
+            latestSeq: 2,
+            serverTime: secondServerTime,
+          }),
+        );
+
+        service.downloadRemoteOps(mockApiProvider);
+        tick();
+        tick(500);
+
+        service.downloadRemoteOps(mockApiProvider);
+        tick();
+        tick(500);
+
+        expect(OpLog.warn).toHaveBeenCalledWith(
+          'OperationLogDownloadService: Clock drift detected',
+          jasmine.objectContaining({
+            driftMinutes: jasmine.any(String),
+            direction: 'client ahead',
+          }),
+        );
+        expect(mockSnackService.open).toHaveBeenCalledTimes(1);
       }));
 
       it('should skip clock drift check when serverTime is not provided (backwards compatibility)', fakeAsync(() => {

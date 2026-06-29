@@ -81,6 +81,24 @@ vi.mock('../src/db', async () => {
             applyOperationSelect(state.operations.get(args.where.id), args.select) || null
           );
         }
+        // Single-entity conflict lookup: where { userId, entityType,
+        // OR: [{ entityId: X }, { entityIds: { has: X } }] } (#8334).
+        if (Array.isArray(args.where?.OR) && args.where?.entityType) {
+          const targetId =
+            args.where.OR.find((c: any) => 'entityId' in c)?.entityId ??
+            args.where.OR.find((c: any) => c.entityIds?.has !== undefined)?.entityIds
+              ?.has;
+          const ops = Array.from(state.operations.values())
+            .filter(
+              (op: any) =>
+                op.userId === args.where.userId &&
+                op.entityType === args.where.entityType &&
+                (op.entityId === targetId ||
+                  (Array.isArray(op.entityIds) && op.entityIds.includes(targetId))),
+            )
+            .sort((a: any, b: any) => b.serverSeq - a.serverSeq);
+          return applyOperationSelect(ops[0], args.select) || null;
+        }
         if (args.where?.entityId && args.where?.entityType) {
           const ops = Array.from(state.operations.values())
             .filter(
@@ -393,10 +411,12 @@ vi.mock('../src/db', async () => {
 });
 
 import { initSyncService, getSyncService } from '../src/sync/sync.service';
+import { OperationDownloadService } from '../src/sync/services/operation-download.service';
 
 describe('TIME_TRACKING Operations', () => {
   const userId = 1;
   const clientId = 'time-tracking-client';
+  let operationDownloadService: OperationDownloadService;
 
   /**
    * Creates a TIME_TRACKING operation with the standard structure.
@@ -441,6 +461,7 @@ describe('TIME_TRACKING Operations', () => {
       createdAt: new Date(),
     });
     initSyncService();
+    operationDownloadService = new OperationDownloadService();
   });
 
   describe('Operation Upload', () => {
@@ -795,8 +816,9 @@ describe('TIME_TRACKING Operations', () => {
 
       await service.uploadOps(userId, clientId, [op]);
 
-      // Another client downloads - getOpsSince returns { op: Operation, serverSeq }[]
-      const downloadedOps = await service.getOpsSince(userId, 0);
+      // Another client downloads - getOpsSinceWithSeq returns { op: Operation, serverSeq }[]
+      const downloadedOps = (await operationDownloadService.getOpsSinceWithSeq(userId, 0))
+        .ops;
 
       expect(downloadedOps).toHaveLength(1);
       expect(downloadedOps[0].op.entityType).toBe('TIME_TRACKING');
@@ -815,7 +837,8 @@ describe('TIME_TRACKING Operations', () => {
 
       await service.uploadOps(userId, clientId, [op]);
 
-      const downloadedOps = await service.getOpsSince(userId, 0);
+      const downloadedOps = (await operationDownloadService.getOpsSinceWithSeq(userId, 0))
+        .ops;
 
       expect(downloadedOps[0].op.payload).toEqual({
         contextType: 'PROJECT',

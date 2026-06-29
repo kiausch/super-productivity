@@ -1,14 +1,17 @@
 import { TestBed } from '@angular/core/testing';
 import { DateTimeFormatService } from './date-time-format.service';
-import { provideMockStore } from '@ngrx/store/testing';
+import { MockStore, provideMockStore } from '@ngrx/store/testing';
 import { DEFAULT_GLOBAL_CONFIG } from '../../features/config/default-global-config.const';
 import { DateAdapter, MatNativeDateModule } from '@angular/material/core';
 import {
   DateTimeLocales,
   DEFAULT_FIRST_DAY_OF_WEEK,
+  LanguageCode,
 } from 'src/app/core/locale.constants';
 import { GlobalConfigState } from '../../features/config/global-config.model';
 import { CustomDateAdapter } from './custom-date-adapter';
+import { TranslateService } from '@ngx-translate/core';
+import { LanguageService } from '../language/language.service';
 
 describe('DateTimeFormatService', () => {
   let service: DateTimeFormatService;
@@ -31,6 +34,10 @@ describe('DateTimeFormatService', () => {
       providers: [
         DateTimeFormatService,
         { provide: DateAdapter, useClass: CustomDateAdapter },
+        {
+          provide: TranslateService,
+          useValue: { currentLang: 'en', defaultLang: 'en' },
+        },
         provideMockStore({
           initialState: {
             globalConfig: config,
@@ -49,6 +56,10 @@ describe('DateTimeFormatService', () => {
       providers: [
         DateTimeFormatService,
         { provide: DateAdapter, useClass: CustomDateAdapter },
+        {
+          provide: TranslateService,
+          useValue: { currentLang: 'en', defaultLang: 'en' },
+        },
         provideMockStore({
           initialState: {
             globalConfig: DEFAULT_GLOBAL_CONFIG,
@@ -229,6 +240,199 @@ describe('DateTimeFormatService', () => {
 
       const formattedKoKr = service.formatTime(testTime, DateTimeLocales.ko_kr);
       expect(formattedKoKr).toBe('오후 2:00');
+    });
+  });
+
+  describe('dateTimeLocale config fallback', () => {
+    let mockStore: MockStore;
+
+    beforeEach(() => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [MatNativeDateModule],
+        providers: [
+          DateTimeFormatService,
+          { provide: DateAdapter, useClass: CustomDateAdapter },
+          {
+            provide: TranslateService,
+            useValue: {
+              currentLang: 'fr',
+              defaultLang: 'en',
+            },
+          },
+          provideMockStore({
+            initialState: {
+              globalConfig: {
+                ...DEFAULT_GLOBAL_CONFIG,
+                localization: {
+                  ...DEFAULT_GLOBAL_CONFIG.localization,
+                  dateTimeLocale: 'de',
+                },
+              },
+            },
+          }),
+        ],
+      });
+      mockStore = TestBed.inject(MockStore);
+      service = TestBed.inject(DateTimeFormatService);
+    });
+
+    it('should fall back to active UI language when dateTimeLocale is removed', () => {
+      // Initially, it should use the configured override 'de'
+      TestBed.flushEffects();
+      expect(service.currentLocale()).toBe('de');
+
+      // Now update config to remove the override (setting it to null)
+      mockStore.setState({
+        globalConfig: {
+          ...DEFAULT_GLOBAL_CONFIG,
+          localization: {
+            ...DEFAULT_GLOBAL_CONFIG.localization,
+            dateTimeLocale: null,
+          },
+        },
+      });
+      TestBed.flushEffects();
+
+      // It should fall back to currentLang 'fr'
+      expect(service.currentLocale()).toBe('fr');
+    });
+  });
+
+  describe('explicit dateTimeLocale override (#8565)', () => {
+    const TIME_FORMAT: Intl.DateTimeFormatOptions = {
+      hour: 'numeric',
+      minute: 'numeric',
+    };
+    // 14:00 — renders "14:00" in 24h locales, "2:00 PM" in 12h (en-US) locales.
+    // The adapter time path (matTimepicker) uses the adapter's setLocale value,
+    // which is what the bug clobbered with the UI language.
+    const testDate = new Date(2000, 11, 31, 14, 0, 0);
+
+    const setup = (
+      dateTimeLocale: string | null,
+      currentLang: string,
+    ): DateTimeFormatService => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [MatNativeDateModule],
+        providers: [
+          DateTimeFormatService,
+          { provide: DateAdapter, useClass: CustomDateAdapter },
+          {
+            provide: TranslateService,
+            useValue: { currentLang, defaultLang: 'en' },
+          },
+          provideMockStore({
+            initialState: {
+              globalConfig: {
+                ...DEFAULT_GLOBAL_CONFIG,
+                localization: {
+                  ...DEFAULT_GLOBAL_CONFIG.localization,
+                  lng: currentLang,
+                  dateTimeLocale,
+                },
+              },
+            },
+          }),
+        ],
+      });
+      dateAdapter = TestBed.inject(DateAdapter);
+      return TestBed.inject(DateTimeFormatService);
+    };
+
+    it('renders adapter time in 24h when dateTimeLocale is 24h but UI language is en', () => {
+      service = setup(DateTimeLocales.ja_jp, 'en');
+      TestBed.flushEffects();
+
+      expect(service.currentLocale()).toBe(DateTimeLocales.ja_jp);
+      expect(dateAdapter.format(testDate, TIME_FORMAT)).toBe('14:00');
+    });
+
+    it('does not let UI-language application clobber the dateTimeLocale override', () => {
+      service = setup(DateTimeLocales.ja_jp, 'en');
+      TestBed.flushEffects();
+      expect(dateAdapter.format(testDate, TIME_FORMAT)).toBe('14:00');
+
+      // Applying the UI language must NOT synchronously touch the adapter locale
+      // (DateTimeFormatService is the single owner). Before the fix this called
+      // setDateAdapterLocale('en') → 12h, and in the real-app startup race that
+      // clobbering write was the last one, so it stuck (#8565). Assert without
+      // flushing effects to capture exactly that window.
+      service.setUiLanguage('en');
+      expect(dateAdapter.format(testDate, TIME_FORMAT)).toBe('14:00');
+
+      // Re-running the owning effect keeps the override applied.
+      TestBed.flushEffects();
+      expect(dateAdapter.format(testDate, TIME_FORMAT)).toBe('14:00');
+    });
+
+    it('uses the UI language only as a fallback when no override is set', () => {
+      service = setup(null, 'en');
+      service.setUiLanguage('en');
+      TestBed.flushEffects();
+
+      // en (US) → 12h AM/PM
+      expect(dateAdapter.format(testDate, TIME_FORMAT)).toBe('2:00 PM');
+    });
+  });
+
+  describe('LanguageService wiring keeps the dateTimeLocale override (#8565)', () => {
+    const TIME_FORMAT: Intl.DateTimeFormatOptions = {
+      hour: 'numeric',
+      minute: 'numeric',
+    };
+    const testDate = new Date(2000, 11, 31, 14, 0, 0);
+
+    // Integration guard: the existing #8565 specs call setUiLanguage() directly.
+    // This one boots the *real* LanguageService so a regression that points
+    // _set() back at setDateAdapterLocale() (re-introducing the original race)
+    // is caught — that is the actual code path that clobbered the override.
+    it('renders 24h after LanguageService applies UI language "en" over a ja-jp override', () => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [MatNativeDateModule],
+        providers: [
+          DateTimeFormatService,
+          LanguageService,
+          { provide: DateAdapter, useClass: CustomDateAdapter },
+          {
+            provide: TranslateService,
+            useValue: {
+              currentLang: 'en',
+              defaultLang: 'en',
+              use: () => {},
+              getBrowserCultureLang: () => undefined,
+              getBrowserLang: () => undefined,
+            },
+          },
+          provideMockStore({
+            initialState: {
+              globalConfig: {
+                ...DEFAULT_GLOBAL_CONFIG,
+                localization: {
+                  ...DEFAULT_GLOBAL_CONFIG.localization,
+                  dateTimeLocale: DateTimeLocales.ja_jp,
+                },
+              },
+            },
+          }),
+        ],
+      });
+
+      const adapter = TestBed.inject(DateAdapter);
+      TestBed.inject(DateTimeFormatService); // construct → owning effect registers
+      TestBed.flushEffects(); // applies the ja-jp override
+      expect(adapter.format(testDate, TIME_FORMAT)).toBe('14:00');
+
+      // Apply the UI language through the real service. It must route through
+      // setUiLanguage() (a fallback), not write the adapter — so the override
+      // still wins in the synchronous pre-flush window where the race struck.
+      TestBed.inject(LanguageService).setLng(LanguageCode.en);
+      expect(adapter.format(testDate, TIME_FORMAT)).toBe('14:00');
+
+      TestBed.flushEffects();
+      expect(adapter.format(testDate, TIME_FORMAT)).toBe('14:00');
     });
   });
 });

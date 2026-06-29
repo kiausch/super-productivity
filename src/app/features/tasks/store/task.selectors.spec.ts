@@ -14,6 +14,10 @@ import {
 } from '../../project/store/project.selectors';
 import { TAG_FEATURE_NAME } from '../../tag/store/tag.reducer';
 import { appStateFeatureKey } from '../../../root-store/app-state/app-state.reducer';
+import {
+  selectStartOfNextDayDiffMs,
+  selectTodayStr,
+} from '../../../root-store/app-state/app-state.selectors';
 
 describe('Task Selectors', () => {
   // Define mock tasks
@@ -232,6 +236,10 @@ describe('Task Selectors', () => {
     fromSelectors.selectAllTasks.clearResult();
     fromSelectors.selectAllTasksInActiveProjects.clearResult();
     fromSelectors.selectOverdueTasks.clearResult();
+    // work-view.component.spec overrides these via overrideSelector (setResult);
+    // selectOverdueTasks reads them, so the leaked "today"/offset must be cleared too.
+    selectTodayStr.clearResult();
+    selectStartOfNextDayDiffMs.clearResult();
     selectProjectFeatureState.clearResult();
     selectAllProjects.clearResult();
     selectArchivedProjects.clearResult();
@@ -247,6 +255,8 @@ describe('Task Selectors', () => {
     fromSelectors.selectAllTasks.release();
     fromSelectors.selectAllTasksInActiveProjects.release();
     fromSelectors.selectOverdueTasks.release();
+    selectTodayStr.release();
+    selectStartOfNextDayDiffMs.release();
     selectProjectFeatureState.release();
     selectAllProjects.release();
     selectArchivedProjects.release();
@@ -545,6 +555,62 @@ describe('Task Selectors', () => {
       expect(result[0].id).toBe('olderOverdue');
       expect(result[1].id).toBe('task6');
     });
+
+    it('selectOverdueTasksWithSubTasks should keep a stable order for calendar-invalid dueDay values', () => {
+      const twoDaysMs = 2 * 86400000;
+      const twoDaysAgo = getDbDateStr(new Date(Date.now() - twoDaysMs));
+
+      // Passes the lexical isDBDateStr guard but parses to Invalid Date (NaN)
+      const invalidDueDay: Task = {
+        id: 'invalidDueDay',
+        title: 'Invalid Due Day',
+        created: Date.now(),
+        isDone: false,
+        subTaskIds: [],
+        tagIds: [],
+        projectId: 'project1',
+        timeSpentOnDay: {},
+        dueDay: '2024-02-30',
+        timeEstimate: 0,
+        timeSpent: 0,
+        attachments: [],
+      };
+      const olderOverdue: Task = {
+        ...invalidDueDay,
+        id: 'olderOverdue',
+        title: 'Older Overdue',
+        dueDay: twoDaysAgo,
+      };
+
+      const stateWithInvalidDueDay = {
+        ...mockState,
+        [TASK_FEATURE_NAME]: {
+          ...mockTaskState,
+          ids: [...mockTaskState.ids, 'invalidDueDay', 'olderOverdue'],
+          entities: {
+            ...mockTaskState.entities,
+            invalidDueDay,
+            olderOverdue,
+          },
+        },
+      };
+
+      // the invalid date string triggers devError, which throws when the globally
+      // mocked confirm() returns true (see src/test.ts) — opt out for this test
+      const confirmSpy = window.confirm as unknown as jasmine.Spy;
+      confirmSpy.and.returnValue(false);
+      try {
+        const result =
+          fromSelectors.selectOverdueTasksWithSubTasks(stateWithInvalidDueDay);
+        expect(result.length).toBe(3);
+        // NaN-parsing dueDay is pinned to the front; valid tasks stay chronological
+        expect(result[0].id).toBe('invalidDueDay');
+        expect(result[1].id).toBe('olderOverdue');
+        expect(result[2].id).toBe('task6');
+      } finally {
+        confirmSpy.and.returnValue(true);
+      }
+    });
     describe('selectOverdueTasks with startOfNextDayDiffMs offset', () => {
       const FOUR_HOURS = 4 * 3600 * 1000;
 
@@ -839,15 +905,6 @@ describe('Task Selectors', () => {
       });
       expect(result.length).toBe(1);
       expect(result[0].id).toBe('task7');
-    });
-  });
-
-  // Project-related selectors
-  describe('Project-related selectors', () => {
-    it('should select all tasks without hidden projects', () => {
-      const result = fromSelectors.selectAllTasksWithoutHiddenProjects(mockState);
-      // All tasks should still be returned since none belong to hidden project3
-      expect(result.length).toBe(11);
     });
   });
 

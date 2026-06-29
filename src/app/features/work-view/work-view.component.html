@@ -132,18 +132,19 @@
           }
           @if (customizedUndoneTasks(); as customized) {
             @if (customized.grouped) {
-              @for (group of customized.grouped | keyvalue; track group.key) {
+              @for (
+                groupKey of customizerService.getOrderedGroupKeys(customized.grouped);
+                track groupKey
+              ) {
                 <collapsible
-                  [title]="group.key | scheduledDateGroup"
+                  [title]="groupKey | scheduledDateGroup"
                   [isIconBefore]="true"
-                  [isExpanded]="
-                    !customizerService.collapsedGroupIds().includes(group.key)
-                  "
-                  (isExpandedChange)="customizerService.toggleGroupExpansion(group.key)"
+                  [isExpanded]="!customizerService.collapsedGroupIds().includes(groupKey)"
+                  (isExpandedChange)="customizerService.toggleGroupExpansion(groupKey)"
                   [isGroup]="true"
                 >
                   <task-list
-                    [tasks]="group.value"
+                    [tasks]="customized.grouped[groupKey]"
                     listId="PARENT"
                     listModelId="UNDONE"
                   ></task-list>
@@ -277,7 +278,10 @@
             </section>
           }
 
-          @if (laterTodayTasks().length > 0 && isOnTodayList()) {
+          @if (
+            (laterTodayTasks().length > 0 || laterTodayCalendarEvents().length > 0) &&
+            isOnTodayList()
+          ) {
             <div
               @expand
               class="collapsible-section"
@@ -286,7 +290,7 @@
                 [title]="
                   (T.WW.LATER_TODAY | translate) +
                   ' (' +
-                  (laterTodayTasks()?.length || 0) +
+                  (laterTodayTasks().length + laterTodayCalendarEvents().length) +
                   ')'
                 "
                 [isExpanded]="!isLaterTodayHidden()"
@@ -300,6 +304,16 @@
                   listId="PARENT"
                   listModelId="LATER_TODAY"
                 ></task-list>
+                @if (laterTodayCalendarEvents().length) {
+                  <div class="later-today-cal-events">
+                    @for (calEv of laterTodayCalendarEvents(); track calEv.id) {
+                      <planner-calendar-event
+                        [calendarEvent]="calEv"
+                        [showStartTime]="true"
+                      ></planner-calendar-event>
+                    }
+                  </div>
+                }
               </collapsible>
             </div>
           }
@@ -375,6 +389,31 @@
                     <repeat-cfg-preview [repeatCfg]="repeatCfg"></repeat-cfg-preview>
                   }
                 </div>
+              </collapsible>
+            </div>
+          }
+
+          @if (isShowClaimPool()) {
+            <div
+              @expand
+              class="collapsible-section"
+            >
+              <collapsible
+                [title]="
+                  (T.PLAINSPACE.CLAIM_POOL_TITLE | translate) +
+                  ' (' +
+                  unclaimedTasks().length +
+                  ')'
+                "
+                [isExpanded]="!isClaimPoolHidden()"
+                (isExpandedChange)="isClaimPoolHidden.set(!$event)"
+                [isIconBefore]="true"
+                [isGroup]="true"
+              >
+                <plainspace-claim-pool
+                  [tasks]="unclaimedTasks()"
+                  [projectId]="workContextService.activeWorkContextId || ''"
+                ></plainspace-claim-pool>
               </collapsible>
             </div>
           }

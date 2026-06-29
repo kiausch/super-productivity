@@ -47,6 +47,7 @@ import { LayoutService } from '../../../core-ui/layout/layout.service';
 import { devError } from '../../../util/dev-error';
 import { IS_MOBILE } from '../../../util/is-mobile';
 import { GlobalConfigService } from '../../config/global-config.service';
+import { DEFAULT_GLOBAL_CONFIG } from '../../config/default-global-config.const';
 import { TranslatePipe, TranslateService } from '@ngx-translate/core';
 import { getTaskRepeatInfoText } from './get-task-repeat-info-text.util';
 import { DateTimeFormatService } from '../../../core/date-time-format/date-time-format.service';
@@ -81,7 +82,12 @@ import { isDeadlineOverdue as isDeadlineOverdueFn } from '../util/is-deadline-ov
 import { isMarkdownChecklist } from '../../markdown-checklist/is-markdown-checklist';
 import { Log } from '../../../core/log';
 import { isInputElement } from '../../../util/dom-element';
+import { clipboardHasText } from '../../../util/clipboard-has-text';
 import { checkKeyCombo } from '../../../util/check-key-combo';
+import { IS_MAC } from '../../../util/is-mac';
+import { ClipboardImageService } from '../../../core/clipboard-image/clipboard-image.service';
+import { DropPasteIcons } from '../../../core/drop-paste-input/drop-paste.model';
+import { AddSubtaskInputService } from '../add-subtask-input/add-subtask-input.service';
 
 @Component({
   selector: 'task-detail-panel',
@@ -117,6 +123,7 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
   taskService = inject(TaskService);
   layoutService = inject(LayoutService);
 
+  private _clipboardImageService = inject(ClipboardImageService);
   private _globalConfigService = inject(GlobalConfigService);
   private _issueService = inject(IssueService);
   private _taskRepeatCfgService = inject(TaskRepeatCfgService);
@@ -125,6 +132,7 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
   private _translateService = inject(TranslateService);
   private _destroyRef = inject(DestroyRef);
   private _dateTimeFormatService = inject(DateTimeFormatService);
+  private _addSubtaskInputService = inject(AddSubtaskInputService);
 
   // Inputs
   task = input.required<TaskWithSubTasks>();
@@ -141,6 +149,9 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
   ShowSubTasksMode = HideSubTasksMode;
   T = T;
   ICAL_TYPE = ICAL_TYPE;
+  pasteImageHintKey = IS_MAC
+    ? T.F.TASK.ADDITIONAL_INFO.PASTE_IMAGE_HINT_MAC
+    : T.F.TASK.ADDITIONAL_INFO.PASTE_IMAGE_HINT;
 
   // Panel state signals grouped together
   panelState = {
@@ -169,7 +180,18 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
     if (!cfg) throw new Error('No config service available');
 
     const keys = cfg.keyboard;
-    if (checkKeyCombo(ev, keys.taskToggleDetailPanelOpen)) this.collapseParent();
+    if (checkKeyCombo(ev, keys.taskToggleDetailPanelOpen)) {
+      this.collapseParent();
+    } else if (checkKeyCombo(ev, keys.taskAddSubTask)) {
+      // Opening the panel auto-focuses a detail item, so focus is inside the
+      // panel rather than on a <task> row. The global task-shortcut handler
+      // can't resolve a focused task in that state and drops the shortcut, so
+      // handle add-subtask here. stopPropagation prevents the document-level
+      // handler from adding a second subtask when focus is on an in-panel row.
+      ev.preventDefault();
+      ev.stopPropagation();
+      this.addSubTask();
+    }
   }
 
   // Parent task data
@@ -205,6 +227,7 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
           repeatCfg,
           this._dateTimeFormatService.currentLocale(),
           this._dateTimeFormatService,
+          this._translateService,
         );
         return this._translateService.instant(key, params);
       }),
@@ -266,6 +289,13 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
     const tasks = this._globalConfigService.tasks();
     return tasks?.notesTemplate || '';
   });
+
+  // True only for the app's generic stock template (not a user-customized one).
+  // Used to let the checklist button replace the shown default text with a fresh
+  // checklist; customized templates are treated as real content and preserved.
+  isStockNotesTemplate = computed(
+    () => this.defaultTaskNotes() === DEFAULT_GLOBAL_CONFIG.tasks.notesTemplate,
+  );
 
   // Local attachments computed signal
   localAttachments = computed(() => {
@@ -444,6 +474,41 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
     this.panelState.isDragOver.set(false);
   }
 
+  @HostListener('paste', ['$event']) async onPaste(ev: ClipboardEvent): Promise<void> {
+    // Let existing textarea/input/contenteditable paste handlers work normally
+    const target = ev.target as HTMLElement;
+    if (isInputElement(target)) {
+      return;
+    }
+
+    // Prioritize text over images (e.g. OneNote puts both on the clipboard).
+    // Otherwise a text paste would be silently turned into an image attachment.
+    if (clipboardHasText(ev.clipboardData)) {
+      return;
+    }
+
+    const progress = this._clipboardImageService.handlePasteWithProgress(ev);
+    if (!progress) return;
+
+    ev.preventDefault();
+    try {
+      const result = await progress.resultPromise;
+      if (result.success && result.imageUrl) {
+        this.attachmentService.addAttachment(this.task().id, {
+          id: null,
+          type: 'IMG',
+          path: result.imageUrl,
+          title: this._translateService.instant(
+            T.F.TASK.ADDITIONAL_INFO.PASTED_IMAGE_TITLE,
+          ),
+          icon: DropPasteIcons.IMG,
+        });
+      }
+    } catch (err) {
+      Log.err('[CLIPBOARD] Paste attachment failed:', err);
+    }
+  }
+
   @HostListener('window:popstate') onBack(): void {
     this.collapseParent();
   }
@@ -550,7 +615,7 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
 
   addSubTask(): void {
     const task = this.task();
-    this.taskService.addSubTaskTo(task.parentId || task.id);
+    this._addSubtaskInputService.requestOpen(task.parentId || task.id);
   }
 
   collapseParent(): void {
@@ -608,8 +673,7 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   focusItem(cmpInstance: TaskDetailItemComponent, timeoutDuration: number = 150): void {
-    window.clearTimeout(this._focusTimeout);
-    this._focusTimeout = window.setTimeout(() => {
+    this._scheduleTaskGuardedFocus(timeoutDuration, () => {
       const itemEls = this.itemEls();
       if (!itemEls) {
         throw new Error();
@@ -622,7 +686,24 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
         this.panelState.selectedItemIndex.set(i);
         cmpInstance.elementRef.nativeElement.focus();
       }
-    }, timeoutDuration);
+    });
+  }
+
+  /**
+   * Schedules a deferred focus action, but only runs it if the panel still
+   * shows the same task when the timer fires. A focus scheduled for one task
+   * (e.g. the auto-focus on panel open) must not steal focus once the user has
+   * navigated the list to a different task (#6578). Capturing the id at
+   * schedule time — not at fire time — is what makes a late timer a no-op.
+   */
+  private _scheduleTaskGuardedFocus(delayMs: number, focusFn: () => void): void {
+    window.clearTimeout(this._focusTimeout);
+    const scheduledForTaskId = this.task().id;
+    this._focusTimeout = window.setTimeout(() => {
+      if (this.task().id === scheduledForTaskId) {
+        focusFn();
+      }
+    }, delayMs);
   }
 
   updateTaskTitleIfChanged(isChanged: boolean, newTitle: string): void {
@@ -632,7 +713,7 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
   }
 
   private _focusFirst(): void {
-    this._focusTimeout = window.setTimeout(() => {
+    this._scheduleTaskGuardedFocus(150, () => {
       const itemEls = this.itemEls();
       if (!itemEls) {
         throw new Error('No items found');
@@ -640,6 +721,6 @@ export class TaskDetailPanelComponent implements OnInit, AfterViewInit, OnDestro
       if (itemEls.length && itemEls[0]) {
         this.focusItem(itemEls[0], 0);
       }
-    }, 150);
+    });
   }
 }

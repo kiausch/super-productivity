@@ -4,6 +4,7 @@ import { toSignal } from '@angular/core/rxjs-interop';
 import { map } from 'rxjs/operators';
 import { Project } from '../project/project.model';
 import { Tag } from '../tag/tag.model';
+import { TODAY_TAG } from '../tag/tag.const';
 import {
   MenuTreeFolderNode,
   MenuTreeKind,
@@ -19,6 +20,8 @@ import {
   selectMenuTreeProjectTree,
   selectMenuTreeTagTree,
 } from './store/menu-tree.selectors';
+import { selectAllProjects } from '../project/store/project.selectors';
+import { selectAllTags } from '../tag/store/tag.reducer';
 import {
   updateProjectTree,
   updateTagTree,
@@ -40,8 +43,63 @@ export class MenuTreeService {
     initialValue: [] as MenuTreeTreeNode[],
   });
 
+  private readonly _allProjects = toSignal(this._store.select(selectAllProjects), {
+    initialValue: [] as Project[],
+  });
+  private readonly _allTags = toSignal(this._store.select(selectAllTags), {
+    initialValue: [] as Tag[],
+  });
+
   readonly projectTree = computed(() => this._projectTree());
   readonly tagTree = computed(() => this._tagTree());
+
+  readonly projectFolderMap = computed(() => {
+    const projects = this._allProjects().filter(
+      (p) => !p.isArchived && !p.isHiddenFromMenu,
+    );
+    return this._buildFolderMap(projects, this.projectTree(), MenuTreeKind.PROJECT);
+  });
+
+  readonly tagFolderMap = computed(() => {
+    const tags = this._allTags().filter((t) => t.id !== TODAY_TAG.id);
+    return this._buildFolderMap(tags, this.tagTree(), MenuTreeKind.TAG);
+  });
+
+  private _buildFolderMap<T extends { id: string; title: string }>(
+    entities: T[],
+    tree: MenuTreeTreeNode[],
+    kind: MenuTreeKind,
+  ): Map<string, string> {
+    const entityMap = new Map<string, T>();
+    const titleCounts = new Map<string, number>();
+
+    for (const item of entities) {
+      entityMap.set(item.id, item);
+      const title = item.title.trim().toLowerCase();
+      titleCounts.set(title, (titleCounts.get(title) || 0) + 1);
+    }
+
+    const folderMap = new Map<string, string>();
+    const walk = (nodes: MenuTreeTreeNode[], path: string[] = []): void => {
+      for (const node of nodes) {
+        if (node.k === kind) {
+          if (path.length > 0) {
+            const item = entityMap.get(node.id);
+            if (item) {
+              const titleKey = item.title.trim().toLowerCase();
+              if ((titleCounts.get(titleKey) || 0) > 1) {
+                folderMap.set(node.id, path.join(' › '));
+              }
+            }
+          }
+        } else if (node.k === MenuTreeKind.FOLDER) {
+          walk(node.children, [...path, node.name]);
+        }
+      }
+    };
+    walk(tree);
+    return folderMap;
+  }
 
   readonly projectFolders$ = this._store
     .select(selectMenuTreeProjectTree)
@@ -95,6 +153,22 @@ export class MenuTreeService {
         k: MenuTreeKind.TAG,
         tag,
       }),
+      itemType: MenuTreeKind.TAG,
+    });
+  }
+
+  buildProjectListInTreeOrder(projects: Project[]): Project[] {
+    return this._buildListInTreeOrder({
+      storedTree: this.projectTree(),
+      items: projects,
+      itemType: MenuTreeKind.PROJECT,
+    });
+  }
+
+  buildTagListInTreeOrder(tags: Tag[]): Tag[] {
+    return this._buildListInTreeOrder({
+      storedTree: this.tagTree(),
+      items: tags,
       itemType: MenuTreeKind.TAG,
     });
   }
@@ -268,6 +342,44 @@ export class MenuTreeService {
     return nodes
       .map((node) => mapNode(node))
       .filter((node): node is MenuTreeTreeNode => node !== null);
+  }
+
+  private _buildListInTreeOrder<T extends { id: string }>(options: {
+    storedTree: MenuTreeTreeNode[];
+    items: T[];
+    itemType: MenuTreeKind.PROJECT | MenuTreeKind.TAG;
+  }): T[] {
+    const { storedTree, items, itemType } = options;
+    const itemMap = new Map(items.map((item) => [item.id, item]));
+    const usedIds = new Set<string>();
+    const result: T[] = [];
+
+    const walk = (nodes: MenuTreeTreeNode[]): void => {
+      for (const node of nodes) {
+        if (node.k === MenuTreeKind.FOLDER) {
+          walk(node.children);
+          continue;
+        }
+
+        if (node.k === itemType) {
+          const item = itemMap.get(node.id);
+          if (item && !usedIds.has(node.id)) {
+            result.push(item);
+            usedIds.add(node.id);
+          }
+        }
+      }
+    };
+
+    walk(storedTree);
+
+    for (const item of items) {
+      if (!usedIds.has(item.id)) {
+        result.push(item);
+      }
+    }
+
+    return result;
   }
 
   private _collectFolders(

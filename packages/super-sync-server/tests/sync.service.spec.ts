@@ -325,17 +325,19 @@ vi.mock('../src/db', async () => {
         return [{ lastSeq }];
       }
       if (sql.includes('JOIN (VALUES')) {
-        const txUserId = params[params.length - 1] as number;
-        const touchedParams = params.slice(0, -1).flatMap((param: unknown): unknown[] => {
-          if (
-            param &&
-            typeof param === 'object' &&
-            Array.isArray((param as { values?: unknown[] }).values)
-          ) {
-            return (param as { values: unknown[] }).values;
-          }
-          return [param];
-        });
+        // Params are [touchedRows (VALUES join), userId, idArray, idArray]: userId
+        // is the only number; the VALUES join is the first Sql fragment, whose
+        // .values hold the flattened (entity_type, entity_id) touched pairs. The
+        // idArray prefilter params (#8334) are not needed by the mock. (Previously
+        // userId was the last param and the join the only fragment.)
+        const txUserId = params.find((p: unknown) => typeof p === 'number') as number;
+        const valuesParam = params.find(
+          (p: unknown) =>
+            !!p &&
+            typeof p === 'object' &&
+            Array.isArray((p as { values?: unknown[] }).values),
+        ) as { values: unknown[] } | undefined;
+        const touchedParams = valuesParam?.values ?? [];
         const touchedPairs = new Set<string>();
         for (let i = 0; i < touchedParams.length; i += 2) {
           touchedPairs.add(`${touchedParams[i]}\u0000${touchedParams[i + 1]}`);
@@ -599,12 +601,16 @@ vi.mock('../src/auth', () => ({
 
 // Import AFTER mocking
 import { initSyncService, getSyncService, SyncService } from '../src/sync/sync.service';
+import { DeviceService } from '../src/sync/services/device.service';
+import { OperationDownloadService } from '../src/sync/services/operation-download.service';
 import { Operation, DEFAULT_SYNC_CONFIG, SYNC_ERROR_CODES } from '../src/sync/sync.types';
 import { prisma } from '../src/db';
 
 describe('SyncService', () => {
   const userId = 1;
   const clientId = 'test-device-1';
+  let deviceService: DeviceService;
+  let operationDownloadService: OperationDownloadService;
 
   // Factory for the repeated Operation fixture (mirrors createOp in
   // sync-fixes.spec.ts). Override only the fields a test cares about.
@@ -638,6 +644,8 @@ describe('SyncService', () => {
 
     // Initialize service
     initSyncService();
+    deviceService = new DeviceService();
+    operationDownloadService = new OperationDownloadService();
   });
 
   afterEach(() => {
@@ -1609,7 +1617,7 @@ describe('SyncService', () => {
       expect(results[0].accepted).toBe(true);
 
       // Verify round-trip
-      const ops = await service.getOpsSince(userId, 0);
+      const ops = (await operationDownloadService.getOpsSinceWithSeq(userId, 0)).ops;
       expect(ops[0].op.entityId).toBe('task-日本語-émoji-🎉');
     });
 
@@ -1634,7 +1642,7 @@ describe('SyncService', () => {
     });
   });
 
-  describe('getOpsSince', () => {
+  describe('uploadOps + OperationDownloadService', () => {
     it('should return operations after given sequence', async () => {
       const service = getSyncService();
 
@@ -1655,7 +1663,7 @@ describe('SyncService', () => {
         await service.uploadOps(userId, clientId, [op]);
       }
 
-      const ops = await service.getOpsSince(userId, 2);
+      const ops = (await operationDownloadService.getOpsSinceWithSeq(userId, 2)).ops;
 
       expect(ops).toHaveLength(3);
       expect(ops[0].serverSeq).toBe(3);
@@ -1700,7 +1708,8 @@ describe('SyncService', () => {
         },
       ]);
 
-      const ops = await service.getOpsSince(userId, 0, client1);
+      const ops = (await operationDownloadService.getOpsSinceWithSeq(userId, 0, client1))
+        .ops;
 
       expect(ops).toHaveLength(1);
       expect(ops[0].op.entityId).toBe('task-2');
@@ -1727,15 +1736,15 @@ describe('SyncService', () => {
         ]);
       }
 
-      const ops = await service.getOpsSince(userId, 0, undefined, 3);
+      const ops = (
+        await operationDownloadService.getOpsSinceWithSeq(userId, 0, undefined, 3)
+      ).ops;
 
       expect(ops).toHaveLength(3);
     });
 
     it('should return empty array when no operations exist', async () => {
-      const service = getSyncService();
-
-      const ops = await service.getOpsSince(userId, 0);
+      const ops = (await operationDownloadService.getOpsSinceWithSeq(userId, 0)).ops;
 
       expect(ops).toHaveLength(0);
     });
@@ -2025,7 +2034,8 @@ describe('SyncService', () => {
       expect(totalDeleted).toBe(2);
       expect(affectedUserIds).toContain(userId);
 
-      const remaining = await service.getOpsSince(userId, 0);
+      const remaining = (await operationDownloadService.getOpsSinceWithSeq(userId, 0))
+        .ops;
       expect(remaining).toHaveLength(3);
     });
 
@@ -2279,8 +2289,12 @@ describe('SyncService', () => {
       expect(affectedUserIds).toContain(userId);
       expect(affectedUserIds).toContain(user2Id);
 
-      expect((await service.getOpsSince(userId, 0)).length).toBe(0);
-      expect((await service.getOpsSince(user2Id, 0)).length).toBe(0);
+      expect(
+        (await operationDownloadService.getOpsSinceWithSeq(userId, 0)).ops.length,
+      ).toBe(0);
+      expect(
+        (await operationDownloadService.getOpsSinceWithSeq(user2Id, 0)).ops.length,
+      ).toBe(0);
     });
 
     it('should delete stale devices', async () => {
@@ -2345,7 +2359,9 @@ describe('SyncService', () => {
 
       expect(totalDeleted).toBe(0);
       expect(affectedUserIds).toHaveLength(0);
-      expect((await service.getOpsSince(userId, 0)).length).toBe(3);
+      expect(
+        (await operationDownloadService.getOpsSinceWithSeq(userId, 0)).ops.length,
+      ).toBe(3);
     });
 
     it('should not delete recent devices', async () => {
@@ -2489,7 +2505,7 @@ describe('SyncService', () => {
     });
   });
 
-  describe('getAllUserIds', () => {
+  describe('uploadOps + DeviceService user lookup', () => {
     it('should return all users with sync state', async () => {
       const service = getSyncService();
       const user2Id = 2;
@@ -2533,7 +2549,7 @@ describe('SyncService', () => {
         },
       ]);
 
-      const userIds = await service.getAllUserIds();
+      const userIds = await deviceService.getAllUserIds();
 
       expect(userIds).toContain(userId);
       expect(userIds).toContain(user2Id);
@@ -2974,14 +2990,15 @@ describe('SyncService', () => {
       ]);
 
       // Verify operations exist
-      const opsBefore = await service.getOpsSince(userId, 0);
+      const opsBefore = (await operationDownloadService.getOpsSinceWithSeq(userId, 0))
+        .ops;
       expect(opsBefore.length).toBe(2);
 
       // Delete all user data
       await service.deleteAllUserData(userId);
 
       // Verify operations are gone
-      const opsAfter = await service.getOpsSince(userId, 0);
+      const opsAfter = (await operationDownloadService.getOpsSinceWithSeq(userId, 0)).ops;
       expect(opsAfter.length).toBe(0);
     });
 
@@ -3026,7 +3043,7 @@ describe('SyncService', () => {
       expect(results[0].accepted).toBe(true);
 
       // Verify only new operation exists
-      const ops = await service.getOpsSince(userId, 0);
+      const ops = (await operationDownloadService.getOpsSinceWithSeq(userId, 0)).ops;
       expect(ops.length).toBe(1);
       expect(ops[0].op.entityId).toBe('t2');
     });
@@ -3078,11 +3095,12 @@ describe('SyncService', () => {
       await service.deleteAllUserData(userId);
 
       // Verify user 1's data is gone
-      const user1Ops = await service.getOpsSince(userId, 0);
+      const user1Ops = (await operationDownloadService.getOpsSinceWithSeq(userId, 0)).ops;
       expect(user1Ops.length).toBe(0);
 
       // Verify user 2's data still exists
-      const user2Ops = await service.getOpsSince(otherUserId, 0);
+      const user2Ops = (await operationDownloadService.getOpsSinceWithSeq(otherUserId, 0))
+        .ops;
       expect(user2Ops.length).toBe(1);
       expect(user2Ops[0].op.entityId).toBe('t2');
     });

@@ -25,7 +25,7 @@ import {
   sendCompressedBodyParseFailure,
 } from './sync.routes.payload';
 import {
-  computeOpsStorageBytes,
+  computeOpsStorageBytesExcludingKnownDuplicates,
   enforceStorageQuota,
   getRawOpsCount,
   sendOpsBatchTooLargeReply,
@@ -85,16 +85,15 @@ export const uploadOpsHandler = async (
         .send(createValidationErrorResponse(parseResult.error.issues));
     }
 
-    const { ops, clientId, lastKnownServerSeq, requestId, isCleanSlate } =
-      parseResult.data;
+    const { ops, clientId, lastKnownServerSeq, requestId } = parseResult.data;
     const syncService = getSyncService();
 
     Logger.info(
       `[user:${userId}] Upload: ${ops.length} ops from client ${clientId.slice(0, 8)}...`,
     );
 
-    // Rate limit check BEFORE deduplication to prevent bypass
-    // (attacker could retry with same requestId to skip rate limiting)
+    // Post-auth per-user fairness limit, separate from the route-level per-IP
+    // backstop. Check BEFORE deduplication so requestId retries cannot bypass it.
     if (syncService.isRateLimited(userId)) {
       Logger.audit({
         event: 'RATE_LIMITED',
@@ -169,10 +168,16 @@ export const uploadOpsHandler = async (
         // Check storage quota before processing (after dedup to allow retries).
         // Account using the same per-op payload+vectorClock measure that the
         // post-accept counter increment uses, so the gate and the increment
-        // cannot disagree on what "size" means.
+        // cannot disagree on what "size" means. Already-stored exact
+        // duplicates are rejected by uploadOps and never written, so don't make
+        // quota cleanup reserve space for them.
         const typedOpsForGate = ops as unknown as Operation[];
         const { bytes: estimatedDelta, fallback: gateFallback } =
-          computeOpsStorageBytes(typedOpsForGate);
+          await computeOpsStorageBytesExcludingKnownDuplicates(
+            userId,
+            typedOpsForGate,
+            syncService.getMaxClockDriftMs(),
+          );
         if (gateFallback > 0) {
           Logger.warn(
             `computeOpsStorageBytes: ${gateFallback}/${typedOpsForGate.length} unserializable op(s) ` +
@@ -191,7 +196,6 @@ export const uploadOpsHandler = async (
           userId,
           clientId,
           ops as unknown as Operation[],
-          isCleanSlate,
         );
 
         return uploadResults;
@@ -199,8 +203,17 @@ export const uploadOpsHandler = async (
     );
     if (!results) return;
 
-    // Cache results for deduplication if requestId was provided
-    if (requestId) {
+    // Cache results for deduplication if requestId was provided.
+    // Skip caching when the whole batch rolled back (INTERNAL_ERROR): nothing
+    // was committed, so the deterministic-requestId retry must re-process
+    // rather than be served the cached transient failure for the dedup TTL
+    // (REQUEST_DEDUP_TTL_MS = 5 min). INTERNAL_ERROR is produced ONLY by
+    // uploadOps' rollback catch (sync.service.ts), which maps the *entire*
+    // batch to it, so a single match means the transaction failed. #8332
+    if (
+      requestId &&
+      !results.some((r) => r.errorCode === SYNC_ERROR_CODES.INTERNAL_ERROR)
+    ) {
       syncService.cacheOpsRequestResults(userId, requestId, results);
     }
 

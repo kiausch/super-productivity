@@ -415,6 +415,79 @@ describe('TimeBlockSyncEffects', () => {
     flush();
   }));
 
+  describe('event duration', () => {
+    const triggerUpsertForTask = (task: Task): void => {
+      getByIdOnce$Spy.and.callFake(() => of(task));
+      actions$.next(
+        TaskSharedActions.updateTask({
+          task: { id: task.id, changes: { isDone: task.isDone } },
+        }),
+      );
+      tick(COALESCE_MS);
+    };
+
+    const lastDurationMs = (): number =>
+      upsertEventSpy.calls.mostRecent().args[1].durationMs;
+
+    it('uses the remaining estimate (estimate - spent) for an active task', fakeAsync(() => {
+      triggerUpsertForTask(
+        createTask('task-1', {
+          timeEstimate: 60 * 60 * 1000,
+          timeSpent: 51 * 60 * 1000,
+          isDone: false,
+        }),
+      );
+      expect(lastDurationMs()).toBe(9 * 60 * 1000);
+      flush();
+    }));
+
+    it('reflects the actual time spent when a task is done (estimate > spent)', fakeAsync(() => {
+      // Regression for #7949 scenario A: must not shrink to estimate - spent.
+      triggerUpsertForTask(
+        createTask('task-1', {
+          timeEstimate: 60 * 60 * 1000,
+          timeSpent: 51 * 60 * 1000,
+          isDone: true,
+        }),
+      );
+      expect(lastDurationMs()).toBe(51 * 60 * 1000);
+      flush();
+    }));
+
+    it('reflects the actual time spent when a done task overran its estimate (spent > estimate)', fakeAsync(() => {
+      // Regression for #7949 scenario B: must not collapse to the 30min default.
+      triggerUpsertForTask(
+        createTask('task-1', {
+          timeEstimate: 30 * 60 * 1000,
+          timeSpent: 50 * 60 * 1000,
+          isDone: true,
+        }),
+      );
+      expect(lastDurationMs()).toBe(50 * 60 * 1000);
+      flush();
+    }));
+
+    it('falls back to the estimate for a done task with no tracked time', fakeAsync(() => {
+      triggerUpsertForTask(
+        createTask('task-1', {
+          timeEstimate: 45 * 60 * 1000,
+          timeSpent: 0,
+          isDone: true,
+        }),
+      );
+      expect(lastDurationMs()).toBe(45 * 60 * 1000);
+      flush();
+    }));
+
+    it('falls back to the 30min default for a done task with no estimate and no tracked time', fakeAsync(() => {
+      triggerUpsertForTask(
+        createTask('task-1', { timeEstimate: 0, timeSpent: 0, isDone: true }),
+      );
+      expect(lastDurationMs()).toBe(30 * 60 * 1000);
+      flush();
+    }));
+  });
+
   it('caps bulk-delete HTTP fan-out so it does not burst rate limits', fakeAsync(() => {
     const bulkSub = effects.deleteOnBulkTaskDelete$.subscribe();
     const taskIds = ['t-1', 't-2', 't-3', 't-4', 't-5'];
@@ -445,78 +518,6 @@ describe('TimeBlockSyncEffects', () => {
     flushMicrotasks();
     expect(deleteEventSpy).toHaveBeenCalledTimes(5);
     bulkSub.unsubscribe();
-    flush();
-  }));
-
-  it('uses timeSpent as duration when a done task has time tracked', fakeAsync(() => {
-    getByIdOnce$Spy.and.callFake((id: string) =>
-      of(
-        createTask(id, {
-          isDone: true,
-          timeEstimate: 60 * 60 * 1000, // 60 min
-          timeSpent: 51 * 60 * 1000, // 51 min
-        }),
-      ),
-    );
-
-    actions$.next(
-      TaskSharedActions.updateTask({
-        task: { id: 'task-1', changes: { isDone: true } },
-      }),
-    );
-
-    tick(COALESCE_MS);
-
-    expect(upsertEventSpy).toHaveBeenCalledTimes(1);
-    expect(upsertEventSpy.calls.mostRecent().args[1].durationMs).toBe(51 * 60 * 1000);
-    flush();
-  }));
-
-  it('falls back to timeEstimate when a done task has no time tracked', fakeAsync(() => {
-    getByIdOnce$Spy.and.callFake((id: string) =>
-      of(
-        createTask(id, {
-          isDone: true,
-          timeEstimate: 60 * 60 * 1000,
-          timeSpent: 0,
-        }),
-      ),
-    );
-
-    actions$.next(
-      TaskSharedActions.updateTask({
-        task: { id: 'task-1', changes: { isDone: true } },
-      }),
-    );
-
-    tick(COALESCE_MS);
-
-    expect(upsertEventSpy).toHaveBeenCalledTimes(1);
-    expect(upsertEventSpy.calls.mostRecent().args[1].durationMs).toBe(60 * 60 * 1000);
-    flush();
-  }));
-
-  it('uses the larger of estimate and time spent as duration for a non-done task', fakeAsync(() => {
-    getByIdOnce$Spy.and.callFake((id: string) =>
-      of(
-        createTask(id, {
-          isDone: false,
-          timeEstimate: 60 * 60 * 1000, // 60 min
-          timeSpent: 20 * 60 * 1000, // 20 min
-        }),
-      ),
-    );
-
-    actions$.next(
-      TaskSharedActions.updateTask({
-        task: { id: 'task-1', changes: { timeEstimate: 60 * 60 * 1000 } },
-      }),
-    );
-
-    tick(COALESCE_MS);
-
-    expect(upsertEventSpy).toHaveBeenCalledTimes(1);
-    expect(upsertEventSpy.calls.mostRecent().args[1].durationMs).toBe(60 * 60 * 1000);
     flush();
   }));
 });

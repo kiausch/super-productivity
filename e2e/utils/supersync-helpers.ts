@@ -211,7 +211,9 @@ export const createSimulatedClient = async (
   baseURL: string,
   clientName: string,
   testPrefix: string,
+  options: { allowExampleTasks?: boolean } = {},
 ): Promise<SimulatedE2EClient> => {
+  const { allowExampleTasks = false } = options;
   // Use provided baseURL or fall back to localhost:4242 (Playwright fixture may be undefined)
   const effectiveBaseURL = baseURL || 'http://localhost:4242';
 
@@ -228,12 +230,16 @@ export const createSimulatedClient = async (
 
   // Skip onboarding, hints, and example tasks before the app boots.
   // This runs before any page JavaScript, so Angular sees the flags immediately.
-  await page.addInitScript(() => {
+  // Tests of the example-task sync gate opt back in via { allowExampleTasks: true }
+  // so first-run onboarding tasks are actually created.
+  await page.addInitScript((allowExamples) => {
     localStorage.setItem('SUP_ONBOARDING_PRESET_DONE', 'true');
     localStorage.setItem('SUP_ONBOARDING_HINTS_DONE', 'true');
     localStorage.setItem('SUP_IS_SHOW_TOUR', 'true');
-    localStorage.setItem('SUP_EXAMPLE_TASKS_CREATED', 'true');
-  });
+    if (!allowExamples) {
+      localStorage.setItem('SUP_EXAMPLE_TASKS_CREATED', 'true');
+    }
+  }, allowExampleTasks);
 
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
@@ -1081,26 +1087,27 @@ export const markTaskDoneByKey = async (
  * @param client - The simulated E2E client
  */
 export const archiveDoneTasks = async (client: SimulatedE2EClient): Promise<void> => {
-  // Click the "Finish Day" button to go to Daily Summary
+  // Click the "Finish Day" button to go to Daily Summary.
+  // Arm waitForURL *before* clicking via Promise.all: if the click lands a hair
+  // before Angular wires up the routerLink (animation/CD timing), a click-then-wait
+  // sequence silently no-ops and only fails 30s later. Racing them removes that gap.
   const finishDayBtn = client.page.locator('.e2e-finish-day');
   await finishDayBtn.waitFor({ state: 'visible', timeout: UI_VISIBLE_TIMEOUT });
-  await finishDayBtn.click();
-
-  // Wait for navigation to Daily Summary
-  await client.page.waitForURL(/daily-summary/);
+  await Promise.all([client.page.waitForURL(/daily-summary/), finishDayBtn.click()]);
 
   // Click "Save & Go Home" button (has sun icon wb_sunny)
   const saveAndGoHomeBtn = client.page.locator(
     'daily-summary button[mat-flat-button]:has(mat-icon:has-text("wb_sunny"))',
   );
   await saveAndGoHomeBtn.waitFor({ state: 'visible', timeout: UI_VISIBLE_TIMEOUT });
-  await saveAndGoHomeBtn.click();
-
   // Wait for navigation back to work view.
   // Use negative lookahead: /(active\/tasks|tag\/TODAY)/ would match the
   // current /daily-summary URL; adding (?!\/daily-summary) ensures we wait
   // for a real navigation. Also handles tag/TODAY without /tasks suffix.
-  await client.page.waitForURL(/(active\/tasks|tag\/TODAY(?!\/daily-summary))/);
+  await Promise.all([
+    client.page.waitForURL(/(active\/tasks|tag\/TODAY(?!\/daily-summary))/),
+    saveAndGoHomeBtn.click(),
+  ]);
   await client.page.waitForTimeout(UI_SETTLE_STANDARD);
 };
 
@@ -1134,8 +1141,8 @@ export const hasTaskInWorklog = async (
 ): Promise<boolean> => {
   // Only navigate if not already on worklog page
   const currentUrl = client.page.url();
-  if (!currentUrl.includes('/worklog')) {
-    await client.page.goto('/#/tag/TODAY/worklog');
+  if (!currentUrl.includes('/history')) {
+    await client.page.goto('/#/tag/TODAY/history');
     await client.page.waitForLoadState('networkidle');
     await client.page.waitForTimeout(UI_SETTLE_EXTENDED);
   }
@@ -1209,7 +1216,7 @@ export const getWorklogTaskCount = async (
   client: SimulatedE2EClient,
 ): Promise<number> => {
   // Navigate to worklog
-  await client.page.goto('/#/tag/TODAY/worklog');
+  await client.page.goto('/#/tag/TODAY/history');
   await client.page.waitForLoadState('networkidle');
   await client.page.waitForTimeout(UI_SETTLE_STANDARD);
 

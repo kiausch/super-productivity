@@ -43,10 +43,10 @@ import { MatDialog } from '@angular/material/dialog';
 import { IssueService } from '../../../issue/issue.service';
 import { SnackService } from '../../../../core/snack/snack.service';
 import { ProjectService } from '../../../project/project.service';
-import { _MISSING_PROJECT_ } from '../../../project/project.const';
+import { _MISSING_PROJECT_, DEFAULT_PROJECT_ICON } from '../../../project/project.const';
 import { WorkContextService } from '../../../work-context/work-context.service';
 import { GlobalConfigService } from '../../../config/global-config.service';
-import { KeyboardConfig } from '../../../config/keyboard-config.model';
+import { KeyboardConfig } from '@sp/keyboard-config';
 import { DialogScheduleTaskComponent } from '../../../planner/dialog-schedule-task/dialog-schedule-task.component';
 import { DialogDeadlineComponent } from '../../dialog-deadline/dialog-deadline.component';
 import { DialogTimeEstimateComponent } from '../../dialog-time-estimate/dialog-time-estimate.component';
@@ -64,6 +64,7 @@ import { getDbDateStr } from '../../../../util/get-db-date-str';
 import { PlannerActions } from '../../../planner/store/planner.actions';
 import { addSubTask } from '../../../tasks/store/task.actions';
 import { combineDateAndTime } from '../../../../util/combine-date-and-time';
+import { getNextWeekDayOffset } from '../../../../util/get-next-week-day-offset';
 import { DateAdapter } from '@angular/material/core';
 import { ICAL_TYPE } from '../../../issue/issue.const';
 import { IssueIconPipe } from '../../../issue/issue-icon/issue-icon.pipe';
@@ -79,6 +80,9 @@ import { TaskLog } from '../../../../core/log';
 import { isTouchEventInstance } from '../../../../util/is-touch-event.util';
 import { TaskFocusService } from '../../task-focus.service';
 import { DEFAULT_GLOBAL_CONFIG } from 'src/app/features/config/default-global-config.const';
+import { MenuTreeService } from '../../../menu-tree/menu-tree.service';
+import { SelectOptionRowComponent } from '../../../../ui/select-option-row/select-option-row.component';
+import { AddSubtaskInputService } from '../../add-subtask-input/add-subtask-input.service';
 
 @Component({
   selector: 'task-context-menu-inner',
@@ -95,6 +99,7 @@ import { DEFAULT_GLOBAL_CONFIG } from 'src/app/features/config/default-global-co
     MatTooltip,
     IssueIconPipe,
     MenuTouchFixDirective,
+    SelectOptionRowComponent,
   ],
   templateUrl: './task-context-menu-inner.component.html',
   styleUrl: './task-context-menu-inner.component.scss',
@@ -118,10 +123,13 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
   private readonly _workContextService = inject(WorkContextService);
   private readonly _taskFocusService = inject(TaskFocusService);
   private readonly _dateService = inject(DateService);
+  private readonly _menuTreeService = inject(MenuTreeService);
+  private readonly _addSubtaskInputService = inject(AddSubtaskInputService);
 
   protected readonly isTouchActive = isTouchActive;
   protected readonly T = T;
   readonly ESTIMATE_OPTIONS = ESTIMATE_OPTIONS;
+  readonly DEFAULT_PROJECT_ICON = DEFAULT_PROJECT_ICON;
 
   isAdvancedControls = input<boolean>(false);
   todayList = toSignal(this._store.select(selectTodayTaskIds), { initialValue: [] });
@@ -161,9 +169,13 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
   moveToProjectList$: Observable<Project[]> = this._task$.pipe(
     map((t) => t.projectId),
     distinctUntilChanged(),
-    switchMap((pid) => this._projectService.getProjectsWithoutIdSorted$(pid || null)),
+    switchMap((pid) =>
+      this._projectService.getProjectsWithoutIdInTreeOrder$(pid || null),
+    ),
   );
-  toggleTagList = this._tagService.tagsNoMyDayAndNoListSorted;
+  toggleTagList = this._tagService.tagsNoMyDayAndNoListInTreeOrder;
+  projectFolderMap = computed(() => this._menuTreeService.projectFolderMap());
+  tagFolderMap = computed(() => this._menuTreeService.tagFolderMap());
 
   isShowMoveFromAndToBacklogBtns$: Observable<boolean> =
     this._workContextService.activeWorkContext$.pipe(
@@ -292,7 +304,12 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
     setTimeout(() => {
       const taskElement = document.getElementById(`t-${this.task.id}`);
       if (taskElement) {
-        taskElement.focus();
+        // Restore focus to the acted-on task (keyboard continuity) WITHOUT
+        // scrolling: an action that relocates the task (e.g. Overdue -> Today)
+        // would otherwise yank the viewport to the moved task's new position,
+        // breaking "schedule several in a row" triage. The user acted at their
+        // current scroll position, so keep them anchored there. See issue #8533.
+        taskElement.focus({ preventScroll: true });
         // Ensure focusedTaskId is set even if focus event doesn't fire
         this._taskFocusService.focusedTaskId.set(this.task.id);
       }
@@ -332,6 +349,10 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
   focusFirstBtn(ev: FocusEvent): void {
     const t = ev.target as HTMLElement;
     t?.parentElement?.querySelector('button')?.focus();
+  }
+
+  focusFirstSubmenuItem(menu: MatMenu): void {
+    menu.focusFirstItem('program');
   }
 
   goToFocusMode(): void {
@@ -437,7 +458,7 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
   }
 
   addSubTask(): void {
-    this._taskService.addSubTaskTo(this.task.parentId || this.task.id);
+    this._addSubtaskInputService.requestOpen(this.task.parentId || this.task.id);
   }
 
   async duplicate(): Promise<void> {
@@ -653,20 +674,17 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
 
   moveToBacklog(): void {
     if (this.task.projectId && !this.task.parentId) {
+      // Moving to the backlog is a list-position change only; it must not
+      // alter the task's schedule (#8592).
       this._projectService.moveTaskToBacklog(this.task.id, this.task.projectId);
-      if (
-        this.task.dueDay === this._dateService.todayStr() ||
-        (this.task.dueWithTime && this._dateService.isToday(this.task.dueWithTime))
-      ) {
-        this.unschedule();
-      }
     }
   }
 
   moveToToday(): void {
     if (this.task.projectId && !this.task.parentId) {
+      // Moving to the regular list is a list-position change only; it must not
+      // schedule the task for today (#8592).
       this._projectService.moveTaskToTodayList(this.task.id, this.task.projectId);
-      this.addToMyDay();
     }
   }
 
@@ -712,11 +730,7 @@ export class TaskContextMenuInnerComponent implements AfterViewInit, OnDestroy {
         break;
       case 3:
         const nextFirstDayOfWeek = tDate;
-        const dayOffset =
-          (this._dateAdapter.getFirstDayOfWeek() -
-            this._dateAdapter.getDayOfWeek(nextFirstDayOfWeek) +
-            7) %
-            7 || 7;
+        const dayOffset = getNextWeekDayOffset(this._dateAdapter, nextFirstDayOfWeek);
         nextFirstDayOfWeek.setDate(nextFirstDayOfWeek.getDate() + dayOffset);
         this._schedule(nextFirstDayOfWeek);
         break;

@@ -16,6 +16,7 @@ import {
 } from '@angular/core';
 import { takeUntilDestroyed, toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { FormsModule } from '@angular/forms';
+import { CdkTextareaAutosize } from '@angular/cdk/text-field';
 import { MentionModule } from '../../../ui/mentions';
 import { MatInput } from '@angular/material/input';
 import { MatIconButton } from '@angular/material/button';
@@ -65,6 +66,9 @@ import { AddTaskBarParserService } from './add-task-bar-parser.service';
 import { AddTaskBarActionsComponent } from './add-task-bar-actions/add-task-bar-actions.component';
 import { MarkdownPasteService } from '../markdown-paste.service';
 import { dateStrToUtcDate } from '../../../util/date-str-to-utc-date';
+import { isValidSplitTime } from '../../../util/is-valid-split-time';
+import { getDateTimeFromClockString } from '../../../util/get-date-time-from-clock-string';
+import { remindOptionToMilliseconds } from '../util/remind-option-to-milliseconds';
 import { unique } from '../../../util/unique';
 import { MentionConfigService } from '../mention-config.service';
 import { TaskRepeatCfgService } from '../../task-repeat-cfg/task-repeat-cfg.service';
@@ -80,6 +84,8 @@ import { DEFAULT_GLOBAL_CONFIG } from '../../config/default-global-config.const'
 import { Store } from '@ngrx/store';
 import { PlannerActions } from '../../planner/store/planner.actions';
 import { DateService } from '../../../core/date/date.service';
+import { MenuTreeService } from '../../menu-tree/menu-tree.service';
+import { SelectOptionRowComponent } from '../../../ui/select-option-row/select-option-row.component';
 
 @Component({
   selector: 'add-task-bar',
@@ -90,6 +96,7 @@ import { DateService } from '../../../core/date/date.service';
   standalone: true,
   imports: [
     FormsModule,
+    CdkTextareaAutosize,
     MatInput,
     MatIconButton,
     MatIcon,
@@ -104,6 +111,7 @@ import { DateService } from '../../../core/date/date.service';
     TagComponent,
     AddTaskBarActionsComponent,
     TranslateModule,
+    SelectOptionRowComponent,
   ],
   providers: [AddTaskBarStateService, AddTaskBarParserService],
 })
@@ -124,6 +132,7 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
   private readonly _taskRepeatCfgService = inject(TaskRepeatCfgService);
   private readonly _markdownPasteService = inject(MarkdownPasteService);
   private readonly _dateService = inject(DateService);
+  private readonly _menuTreeService = inject(MenuTreeService);
   readonly stateService = inject(AddTaskBarStateService);
 
   T = T;
@@ -155,8 +164,8 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
   isMentionListShown = signal(false);
   isScheduleDialogOpen = signal(false);
 
-  // Computed signals for projects and tags (sorted for consistency)
-  projects = this._projectService.listSortedForUI;
+  // Computed signals for projects and tags
+  projects = this._projectService.listInTreeOrderForUI;
   // Observable version for compatibility with existing code
   projects$ = toObservable(this.projects);
   tags$ = this._tagService.tags$;
@@ -164,6 +173,14 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
   activatedIssueTask = toSignal(this.activatedSuggestion$, { initialValue: null });
 
   // Computed values
+  projectFolderMap = computed(() => this._menuTreeService.projectFolderMap());
+  tagFolderMap = computed(() => this._menuTreeService.tagFolderMap());
+
+  getFolderPath(id?: string): string | null {
+    if (!id) return null;
+    return this.projectFolderMap().get(id) || this.tagFolderMap().get(id) || null;
+  }
+
   hasNewTags = computed(() => this.stateService.state().newTagTitles.length > 0);
   currentProject = computed(() =>
     this.projects().find((p) => p.id === this.stateService.state().projectId),
@@ -256,6 +273,7 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
 
   // View children
   inputEl = viewChild<ElementRef>('inputEl');
+  noteEl = viewChild<ElementRef<HTMLTextAreaElement>>('noteEl');
   taskAutoCompleteEl = viewChild<MatAutocomplete>('taskAutoCompleteEl');
   actionsComponent = viewChild(AddTaskBarActionsComponent);
 
@@ -435,6 +453,37 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
             : additionalFields?.attachments || [],
       };
 
+      const note = this.stateService.noteTxt().trim();
+      if (note) {
+        taskData.notes = note;
+      }
+
+      if (state.spent) {
+        taskData.timeSpentOnDay = state.spent;
+      }
+
+      if (state.deadlineDate) {
+        if (state.deadlineTime && isValidSplitTime(state.deadlineTime)) {
+          const deadlineDateObj = dateStrToUtcDate(state.deadlineDate);
+          const deadlineTimestamp = getDateTimeFromClockString(
+            state.deadlineTime,
+            deadlineDateObj,
+          );
+          taskData.deadlineWithTime = deadlineTimestamp;
+          if (
+            state.deadlineRemindOption &&
+            state.deadlineRemindOption !== TaskReminderOptionId.DoNotRemind
+          ) {
+            taskData.deadlineRemindAt = remindOptionToMilliseconds(
+              deadlineTimestamp,
+              state.deadlineRemindOption,
+            );
+          }
+        } else {
+          taskData.deadlineDay = state.deadlineDate;
+        }
+      }
+
       if (state.date) {
         // Parse date components to create date in local timezone
         // This avoids timezone issues when parsing date strings like "2024-01-15"
@@ -459,8 +508,6 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
         // This prevents automatic assignment of today's date in TODAY context
         taskData.dueDay = undefined;
       }
-
-      Log.x(taskData);
 
       const taskId = this._taskService.add(
         title,
@@ -692,6 +739,14 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
       return;
     }
 
+    // Ctrl/Cmd+Enter reveals the note field instead of submitting, so a note
+    // can be added without leaving the keyboard.
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+      event.preventDefault();
+      this.expandNote();
+      return;
+    }
+
     // Handle Enter key
     if (event.key === 'Enter' && !event.isComposing && event.keyCode !== 229) {
       event.preventDefault();
@@ -721,13 +776,14 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
       ['5']: () => this._callActionMethod('openTagsMenu'),
       ['6']: () => this._callActionMethod('openEstimateMenu'),
       ['7']: () => this._callActionMethod('openRepeatMenu'),
+      ['8']: () => this._callActionMethod('openDeadlineDialog'),
     };
 
     const action = shortcutMap[event.key];
     if (action) {
       event.preventDefault();
-      // Add stopPropagation for action menu shortcuts (3-7)
-      if (['3', '4', '5', '6', '7'].includes(event.key)) {
+      // Add stopPropagation for action menu shortcuts (3-8)
+      if (['3', '4', '5', '6', '7', '8'].includes(event.key)) {
         event.stopPropagation();
       }
       action();
@@ -856,6 +912,44 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
         }
       }, 50);
     }
+  }
+
+  toggleNote(): void {
+    const willExpand = !this.stateService.isNoteExpanded();
+    this.stateService.isNoteExpanded.set(willExpand);
+    if (willExpand) {
+      this._focusNote();
+    } else {
+      this.focusInput();
+    }
+  }
+
+  expandNote(): void {
+    this.stateService.isNoteExpanded.set(true);
+    this._focusNote();
+  }
+
+  onNoteKeydown(event: KeyboardEvent): void {
+    // Ctrl/Cmd+Enter submits from the note field; plain Enter inserts a newline.
+    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+      event.preventDefault();
+      void this.addTask();
+      return;
+    }
+
+    // Escape collapses the note and returns focus to the title without
+    // closing the whole bar (a second Escape on the title closes it).
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      this.stateService.isNoteExpanded.set(false);
+      this.focusInput();
+    }
+  }
+
+  private _focusNote(): void {
+    // Defer so the textarea has been rendered by the `@if` before focusing.
+    window.setTimeout(() => this.noteEl()?.nativeElement.focus());
   }
 
   updateListShown(isShown: boolean): void {

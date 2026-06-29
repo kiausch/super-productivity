@@ -8,7 +8,6 @@ import {
   VectorClock,
   SYNC_ERROR_CODES,
 } from './sync.types';
-import { computeOpStorageBytes } from './sync.const';
 import { Logger } from '../logger';
 import { Prisma } from '@prisma/client';
 import {
@@ -99,6 +98,10 @@ export class SyncService {
     );
   }
 
+  getMaxClockDriftMs(): number {
+    return this.config.maxClockDriftMs;
+  }
+
   // === Upload Operations ===
 
   async uploadOps(
@@ -186,18 +189,20 @@ export class SyncService {
             uploadDbRoundtrips++;
 
             for (const op of ops) {
-              const result = await this.operationUploadService.processOperation(
-                userId,
-                clientId,
-                op,
-                now,
-                tx,
-              );
+              const { result, storageBytes, fallback } =
+                await this.operationUploadService.processOperation(
+                  userId,
+                  clientId,
+                  op,
+                  now,
+                  tx,
+                );
               results.push(result);
               if (result.accepted) {
-                const sized = computeOpStorageBytes(op);
-                acceptedDeltaBytes += sized.bytes;
-                if (sized.fallback) unserializableAccepted += 1;
+                // Reuse the size computed in processOperation instead of
+                // re-measuring (the payload can be multi-MB).
+                acceptedDeltaBytes += storageBytes;
+                if (fallback) unserializableAccepted += 1;
               }
             }
           }
@@ -342,20 +347,6 @@ export class SyncService {
   // === Download Operations ===
   // Delegated to OperationDownloadService
 
-  async getOpsSince(
-    userId: number,
-    sinceSeq: number,
-    excludeClient?: string,
-    limit: number = 500,
-  ): Promise<ServerOperation[]> {
-    return this.operationDownloadService.getOpsSince(
-      userId,
-      sinceSeq,
-      excludeClient,
-      limit,
-    );
-  }
-
   async getOpsSinceWithSeq(
     userId: number,
     sinceSeq: number,
@@ -385,15 +376,6 @@ export class SyncService {
   // === Snapshot Management ===
   // Delegated to SnapshotService
 
-  async getCachedSnapshot(userId: number): Promise<{
-    state: unknown;
-    serverSeq: number;
-    generatedAt: number;
-    schemaVersion: number;
-  } | null> {
-    return this.snapshotService.getCachedSnapshot(userId);
-  }
-
   async prepareSnapshotCache(state: unknown): Promise<PreparedSnapshotCache> {
     return this.snapshotService.prepareSnapshotCache(state);
   }
@@ -404,15 +386,6 @@ export class SyncService {
 
   async getCachedSnapshotGeneratedAt(userId: number): Promise<number | null> {
     return this.snapshotService.getCachedSnapshotGeneratedAt(userId);
-  }
-
-  async cacheSnapshot(
-    userId: number,
-    state: unknown,
-    serverSeq: number,
-    preparedSnapshot?: PreparedSnapshotCache,
-  ): Promise<CacheSnapshotResult> {
-    return this.snapshotService.cacheSnapshot(userId, state, serverSeq, preparedSnapshot);
   }
 
   async cacheSnapshotIfReplayable(
@@ -524,15 +497,6 @@ export class SyncService {
   // === Storage Quota ===
   // Delegated to StorageQuotaService
 
-  async calculateStorageUsage(userId: number): Promise<{
-    operationsBytes: number;
-    snapshotBytes: number;
-    totalBytes: number;
-    hasUnbackfilledRows: boolean;
-  }> {
-    return this.storageQuotaService.calculateStorageUsage(userId);
-  }
-
   async assertPayloadBytesBackfillComplete(): Promise<void> {
     return this.storageQuotaService.assertPayloadBytesBackfillComplete();
   }
@@ -635,14 +599,6 @@ export class SyncService {
     this.snapshotService.clearForUser(userId);
     this.storageQuotaService.clearForUser(userId);
     this.requestDeduplicationService.clearForUser(userId);
-  }
-
-  async isDeviceOwner(userId: number, clientId: string): Promise<boolean> {
-    return this.deviceService.isDeviceOwner(userId, clientId);
-  }
-
-  async getAllUserIds(): Promise<number[]> {
-    return this.deviceService.getAllUserIds();
   }
 
   async getOnlineDeviceCount(userId: number): Promise<number> {

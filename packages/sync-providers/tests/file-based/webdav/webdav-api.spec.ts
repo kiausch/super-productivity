@@ -15,6 +15,8 @@ import {
   MissingCredentialsSPError,
   RemoteFileChangedUnexpectedly,
   RemoteFileNotFoundAPIError,
+  WebDavNativeRequestError,
+  WebDavSyncFolderUnusableSPError,
 } from '../../../src/errors';
 
 const cfg: WebdavPrivateCfg = {
@@ -224,6 +226,34 @@ describe('WebdavApi', () => {
       // PUT + MKCOL + PUT + GET
       expect(adapter.request).toHaveBeenCalledTimes(4);
     });
+
+    // A 409 that persists after we create the parent dir means the
+    // Base URL / Sync Folder Path is misconfigured (classic Synology /
+    // raw-WebDAV setup mistake). Surface an actionable error instead of a
+    // bare `HTTP 409 Conflict` so the user knows what to fix.
+    it('throws an actionable WebDavSyncFolderUnusableSPError when 409 persists after creating parent', async () => {
+      const adapter = makeAdapter();
+      const data = 'fresh';
+      // First PUT → 409
+      adapter.request.mockRejectedValueOnce(
+        new HttpNotOkAPIError(new Response('', { status: 409 })),
+      );
+      // MKCOL → success
+      adapter.request.mockResolvedValueOnce(okResponse('', 201));
+      // Retry PUT → 409 again (folder path still unresolvable)
+      adapter.request.mockRejectedValueOnce(
+        new HttpNotOkAPIError(new Response('', { status: 409 })),
+      );
+
+      const err = await makeApi(adapter)
+        .upload({ path: 'sp/op-1.json', data })
+        .catch((e) => e);
+      expect(err).toBeInstanceOf(WebDavSyncFolderUnusableSPError);
+      // Privacy-safe + actionable message, no path or response body.
+      expect(err.message).toContain('Base URL');
+      expect(err.message).toContain('Sync Folder Path');
+      expect(err.message).not.toContain('op-1.json');
+    });
   });
 
   describe('remove', () => {
@@ -273,14 +303,36 @@ describe('WebdavApi', () => {
       expect(r.success).toBe(false);
     });
 
-    // Safety invariant for #7617: relaxing the folder check must NOT let a
-    // bad password through. A 401 on the base root surfaces as
-    // AuthFailSPError and must still fail the test.
-    it('returns success: false on bad credentials (401 → AuthFailSPError)', async () => {
+    // Issue #7617 follow-up: a 404 must surface a readable, actionable
+    // message + a 404 errorCode discriminator (so the Nextcloud UI can show
+    // its "Username is not your email" hint). The old behaviour leaked the
+    // bare scrubbed host as the message, which users misread as a stripped
+    // URL. The message must NOT echo the host/URL.
+    it('maps a 404 to a readable message + errorCode 404 (not the bare host)', async () => {
       const adapter = makeAdapter();
-      adapter.request.mockRejectedValue(new AuthFailSPError());
+      adapter.request.mockRejectedValue(
+        new RemoteFileNotFoundAPIError('dav.example.com'),
+      );
       const r = await makeApi(adapter).testConnection(cfg);
       expect(r.success).toBe(false);
+      expect(r.errorCode).toBe(404);
+      expect(r.error).toContain('404');
+      expect(r.error).not.toBe('dav.example.com');
+      expect(r.error).not.toContain('dav.example.com');
+    });
+
+    // Safety invariant for #7617: relaxing the folder check must NOT let a
+    // bad password through. A 401 on the base root surfaces as
+    // AuthFailSPError and must still fail the test (its readable message
+    // passes through unchanged; only the 404 case is remapped).
+    it('returns success: false on bad credentials (401 → AuthFailSPError)', async () => {
+      const adapter = makeAdapter();
+      adapter.request.mockRejectedValue(
+        new AuthFailSPError('Authentication failed (HTTP 401)'),
+      );
+      const r = await makeApi(adapter).testConnection(cfg);
+      expect(r.success).toBe(false);
+      expect(r.error).toContain('401');
     });
 
     it('returns success: false with user-facing error + fullUrl on failure', async () => {
@@ -289,6 +341,28 @@ describe('WebdavApi', () => {
       const r = await makeApi(adapter).testConnection(cfg);
       expect(r.success).toBe(false);
       expect(r.error).toBe('Network unreachable');
+      expect(r.fullUrl).toContain('dav.example.com');
+    });
+
+    // Issue #8053: on native platforms the adapter wraps a thrown native
+    // request error (SSL/timeout/DNS) into WebDavNativeRequestError carrying a
+    // readable, already-redacted message. testConnection must surface that
+    // message verbatim as `result.error` so the "Test connection" snackbar
+    // shows something actionable instead of "Unknown error". This guards the
+    // seam between the adapter (proven to redact in webdav-http-adapter.spec)
+    // and the user-facing return value.
+    it('surfaces a native WebDavNativeRequestError message to the user', async () => {
+      const adapter = makeAdapter();
+      adapter.request.mockRejectedValue(
+        new WebDavNativeRequestError(
+          'SSL error: Trust anchor for certification path not found',
+          'SSL_ERROR',
+        ),
+      );
+      const r = await makeApi(adapter).testConnection(cfg);
+      expect(r.success).toBe(false);
+      expect(r.error).toBe('SSL error: Trust anchor for certification path not found');
+      expect(r.error).not.toBe('Unknown error');
       expect(r.fullUrl).toContain('dav.example.com');
     });
 

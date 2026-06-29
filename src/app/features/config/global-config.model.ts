@@ -3,7 +3,7 @@ import { FormlyFieldConfig } from '@ngx-formly/core';
 import { LanguageCode, DateTimeLocale } from '../../core/locale.constants';
 import { SyncProviderId } from '../../op-log/sync-providers/provider.const';
 import { ProjectCfgFormKey } from '../project/project.model';
-import { KeyboardConfig } from './keyboard-config.model';
+import { KeyboardConfig } from '@sp/keyboard-config';
 import { TaskReminderOptionId } from '../tasks/task.model';
 
 export type AppFeaturesConfig = Readonly<{
@@ -176,6 +176,8 @@ export interface LocalFileSyncConfig {
 
 export type LocalBackupConfig = Readonly<{
   isEnabled: boolean;
+  /** Desktop only. Optional for persisted data created before this setting existed. */
+  maxBackupFiles?: number | null;
 }>;
 
 /**
@@ -354,7 +356,7 @@ export interface LimitedFormlyFieldConfig<FormModel> extends Omit<
   FormlyFieldConfig,
   'key'
 > {
-  key?: keyof FormModel;
+  key?: keyof FormModel & (string | number);
 }
 
 export type CustomCfgSection =
@@ -362,6 +364,12 @@ export type CustomCfgSection =
   | 'JIRA_CFG'
   | 'OPENPROJECT_CFG'
   | 'CLIPBOARD_IMAGES_CFG';
+
+export interface ConfigSectionAction {
+  label: string;
+  icon?: string;
+  onClick: () => void | Promise<void>;
+}
 
 // Intermediate model
 export interface ConfigFormSection<FormModel> {
@@ -371,6 +379,7 @@ export interface ConfigFormSection<FormModel> {
   helpArr?: { h?: string; p: string; p2?: string; p3?: string; p4?: string }[];
   customSection?: CustomCfgSection;
   items?: LimitedFormlyFieldConfig<FormModel>[];
+  actions?: ConfigSectionAction[];
   isElectronOnly?: boolean;
   isHideForAndroidApp?: boolean;
 }
