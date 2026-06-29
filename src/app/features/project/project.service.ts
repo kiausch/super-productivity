@@ -169,14 +169,6 @@ export class ProjectService {
     );
   }
 
-  archive(projectId: string): void {
-    this._store$.dispatch(archiveProject({ id: projectId }));
-    this._snackService.open({
-      ico: 'archive',
-      msg: T.F.PROJECT.S.ARCHIVED,
-    });
-  }
-
   getBreakNrForProject$(projectId: string): Observable<BreakNr> {
     return this._timeTrackingService.state$.pipe(
       map((current) => {

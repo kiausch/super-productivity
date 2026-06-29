@@ -1,11 +1,5 @@
 import { inject, Injectable } from '@angular/core';
-import {
-  Worklog,
-  WorklogDay,
-  WorklogWeek,
-  WorklogWeekSimple,
-  WorklogYearsWithWeeks,
-} from './worklog.model';
+import { Worklog, WorklogDay, WorklogWeek } from './worklog.model';
 import { dedupeByKey } from '../../util/de-dupe-by-key';
 import { BehaviorSubject, from, merge, Observable } from 'rxjs';
 import {
@@ -22,7 +16,6 @@ import { getWeekNumber } from '../../util/get-week-number';
 import { WorkContextService } from '../work-context/work-context.service';
 import { WorkContext } from '../work-context/work-context.model';
 import { mapArchiveToWorklog } from './util/map-archive-to-worklog';
-import { mapArchiveToWorklogWeeks } from './util/map-archive-to-worklog-weeks';
 import { TaskService } from '../tasks/task.service';
 import { createEmptyEntity } from '../../util/create-empty-entity';
 import { getCompleteStateForWorkContext } from './util/get-complete-state-for-work-context.util';
@@ -100,38 +93,6 @@ export class WorklogService {
     ),
     shareReplay({ bufferSize: 1, refCount: true }),
   );
-
-  _quickHistoryData$: Observable<WorklogYearsWithWeeks | null> =
-    this._archiveUpdateTrigger$.pipe(
-      switchMap(() =>
-        this._workContextService.activeWorkContext$.pipe(
-          distinctUntilChanged((a, b) => a.id === b.id),
-        ),
-      ),
-      switchMap((curCtx) =>
-        from(
-          this._loadQuickHistoryForWorkContext(curCtx).catch((e) => {
-            Log.err('WorklogService: Failed to load quick history', e);
-            return null;
-          }),
-        ).pipe(startWith(null)),
-      ),
-    );
-
-  quickHistoryWeeks$: Observable<WorklogWeekSimple[] | null> =
-    this._quickHistoryData$.pipe(
-      map((worklogYearsWithWeeks) => {
-        const now = new Date();
-        const year = now.getFullYear();
-        if (!worklogYearsWithWeeks) {
-          return null;
-        }
-        if (!worklogYearsWithWeeks[year]) {
-          return [];
-        }
-        return worklogYearsWithWeeks[year].filter((v) => !!v).reverse();
-      }),
-    );
 
   _worklogDataIfDefined$: Observable<{
     worklog: Worklog;
@@ -274,33 +235,6 @@ export class WorklogService {
       worklog: {},
       totalTimeSpent: 0,
     };
-  }
-
-  private async _loadQuickHistoryForWorkContext(
-    workContext: WorkContext,
-  ): Promise<WorklogYearsWithWeeks | null> {
-    const archive = (await this._taskArchiveService.load()) || createEmptyEntity();
-    const taskState =
-      (await this._taskService.taskFeatureState$.pipe(first()).toPromise()) ||
-      createEmptyEntity();
-
-    const { completeStateForWorkContext, nonArchiveTaskIds } =
-      getCompleteStateForWorkContext(workContext, taskState, archive);
-
-    const workStartEndForWorkContext = await this._timeSessionService.workStartEndMaps$
-      .pipe(first())
-      .toPromise();
-
-    if (completeStateForWorkContext) {
-      return mapArchiveToWorklogWeeks(
-        completeStateForWorkContext,
-        nonArchiveTaskIds,
-        workStartEndForWorkContext,
-        this._dateAdapter.getFirstDayOfWeek(),
-        this._dateTimeFormatService.currentLocale(),
-      );
-    }
-    return null;
   }
 
   private _createTasksForDay(data: WorklogDay): WorklogTask[] {

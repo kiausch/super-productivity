@@ -1,7 +1,7 @@
 import { inject, Injectable } from '@angular/core';
 import { createEffect, ofType } from '@ngrx/effects';
 import { TaskSharedActions } from '../../../root-store/meta/task-shared.actions';
-import { filter, map, switchMap, withLatestFrom } from 'rxjs/operators';
+import { filter, map, switchMap, withLatestFrom, mergeMap } from 'rxjs/operators';
 import { moveTaskInTodayList } from '../../work-context/store/work-context-meta.actions';
 import { GlobalConfigService } from '../../config/global-config.service';
 import { EMPTY, Observable } from 'rxjs';
@@ -17,6 +17,8 @@ import { selectTodayTaskIds } from '../../work-context/store/work-context.select
 import { LOCAL_ACTIONS } from '../../../util/local-actions.token';
 import { HydrationStateService } from '../../../op-log/apply/hydration-state.service';
 import { DateService } from '../../../core/date/date.service';
+import { Task } from '../task.model';
+import { TaskService } from '../task.service';
 
 @Injectable()
 export class TaskRelatedModelEffects {
@@ -25,6 +27,7 @@ export class TaskRelatedModelEffects {
   private _store = inject(Store);
   private _hydrationState = inject(HydrationStateService);
   private _dateService = inject(DateService);
+  private _taskService = inject(TaskService);
 
   // EFFECTS ===> EXTERNAL
   // ---------------------

@@ -1,14 +1,11 @@
 import { inject, Injectable } from '@angular/core';
 import { combineLatest, firstValueFrom, Observable, Subject } from 'rxjs';
-import { TimeTrackingState, TTDateMap, TTWorkContextData } from './time-tracking.model';
+import { TimeTrackingState } from './time-tracking.model';
 import { map, shareReplay, startWith, switchMap } from 'rxjs/operators';
 import { mergeTimeTrackingStates } from './merge-time-tracking-states';
 import { Store } from '@ngrx/store';
 import { selectTimeTrackingState } from './store/time-tracking.selectors';
 import { ArchiveDbAdapter } from '../../core/persistence/archive-db-adapter.service';
-import { WorkContextType, WorkStartEnd } from '../work-context/work-context.model';
-import { ImpossibleError } from '../../op-log/sync-exports';
-import { toLegacyWorkStartEndMaps } from './to-legacy-work-start-end-maps';
 import { TimeTrackingActions } from './store/time-tracking.actions';
 import { Log } from '../../core/log';
 import { initialTimeTrackingState } from './store/time-tracking.reducer';
@@ -52,24 +49,6 @@ export class TimeTrackingService {
     ),
     shareReplay(1),
   );
-
-  getWorkStartEndForWorkContext$(ctx: {
-    id: string;
-    type: WorkContextType;
-  }): Observable<TTDateMap<TTWorkContextData>> {
-    const { id, type } = ctx;
-    return this.state$.pipe(
-      map((state) => {
-        if (type === 'PROJECT') {
-          return state.project[id] || ({} as TTDateMap<TTWorkContextData>);
-        }
-        if (type === 'TAG') {
-          return state.tag[id] || ({} as TTDateMap<TTWorkContextData>);
-        }
-        throw new ImpossibleError('Invalid work context type ' + type);
-      }),
-    );
-  }
 
   async cleanupDataEverywhereForProject(projectId: string): Promise<void> {
     const current = await firstValueFrom(this.current$);
@@ -157,23 +136,5 @@ export class TimeTrackingService {
       await this._archiveDbAdapter.saveArchiveOld(archiveOld);
       this._archiveOldUpdateTrigger$.next(undefined);
     }
-  }
-
-  async getWorkStartEndForWorkContext(ctx: {
-    id: string;
-    type: WorkContextType;
-  }): Promise<TTDateMap<TTWorkContextData>> {
-    return firstValueFrom(this.getWorkStartEndForWorkContext$(ctx));
-  }
-
-  async getLegacyWorkStartEndForWorkContext(ctx: {
-    id: string;
-    type: WorkContextType;
-  }): Promise<{
-    workStart: WorkStartEnd;
-    workEnd: WorkStartEnd;
-  }> {
-    const d = await this.getWorkStartEndForWorkContext(ctx);
-    return toLegacyWorkStartEndMaps(d);
   }
 }
