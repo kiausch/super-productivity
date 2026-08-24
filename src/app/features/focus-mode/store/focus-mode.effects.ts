@@ -22,6 +22,8 @@ import { GlobalConfigService } from '../../config/global-config.service';
 import { TaskService } from '../../tasks/task.service';
 import { playSound } from '../../../util/play-sound';
 import { startWhiteNoise, stopWhiteNoise } from '../../../util/white-noise';
+import { startBreakEndAlarm, stopBreakEndAlarm } from '../../../util/break-end-alarm';
+import { FocusModeLocalSettingsService } from '../../config/focus-mode-local-settings.service';
 import { IS_ELECTRON } from '../../../app.constants';
 import { setCurrentTask, unsetCurrentTask } from '../../tasks/store/task.actions';
 import { selectLastCurrentTask, selectTaskById } from '../../tasks/store/task.selectors';
@@ -62,6 +64,7 @@ export class FocusModeEffects {
   private notifyService = inject(NotifyService);
   private bannerService = inject(BannerService);
   private isAndroidWebView = inject(IS_ANDROID_WEB_VIEW_TOKEN);
+  private focusModeLocalSettingsService = inject(FocusModeLocalSettingsService);
 
   // Sync: When tracking starts → resume/skip-break or auto-spawn a new session.
   //
@@ -71,8 +74,8 @@ export class FocusModeEffects {
   // Auto-spawn (opt-in via `autoStartFocusOnPlay`): if no session is active and
   // the user has opted in, start a new session quietly. The overlay is NOT
   // dispatched — surface comes from the existing banner / future indicator.
-  // Inside the overlay we still respect `isSkipPreparation` so #7384's
-  // rocket-prep flow keeps working for users who entered via F-key.
+  // Inside the overlay we still respect `isShowPreparation` so #7384's
+  // rocket-prep flow keeps working for users who opted into the prep screen.
   syncTrackingStartToSession$ = createEffect(() =>
     this.taskService.currentTaskId$.pipe(
       skipWhileApplyingRemoteOps(),
@@ -125,10 +128,11 @@ export class FocusModeEffects {
             if (!cfg?.autoStartFocusOnPlay) {
               return EMPTY;
             }
-            // Bug #7384: respect isSkipPreparation only inside the overlay
-            // (preparation screen is overlay-bound). For the quiet auto-spawn
-            // path there's no overlay → no rocket → bypass the prep gate.
-            if (isOverlayShown && !cfg?.isSkipPreparation) {
+            // Bug #7384: respect isShowPreparation only inside the overlay
+            // (preparation screen is overlay-bound). When the user opted into the
+            // prep screen, let the manual Start click drive it; the quiet
+            // auto-spawn path (no overlay) has no rocket and bypasses the gate.
+            if (isOverlayShown && cfg?.isShowPreparation) {
               return EMPTY;
             }
             const strategy = this.strategyFactory.getStrategy(mode);
@@ -225,7 +229,8 @@ export class FocusModeEffects {
     ),
   );
 
-  // Sync: When focus session starts → start tracking (if not already tracking)
+  // Sync: When focus session starts → start or switch tracking
+  // An explicitly selected task takes precedence over existing and resumable tasks.
   // Checks that the paused task still exists before starting tracking
   // Bug #5954 fix: Falls back to lastCurrentTask if no pausedTaskId (e.g., after app restart)
   // Bug #5954 fix: Shows focus overlay if no valid (undone) task is available
@@ -237,21 +242,24 @@ export class FocusModeEffects {
         this.taskService.currentTaskId$,
         this.store.select(selectLastCurrentTask),
       ),
-      filter(
-        ([_action, pausedTaskId, currentTaskId, lastCurrentTask]) =>
-          !currentTaskId && (!!pausedTaskId || !!lastCurrentTask),
+      filter(([action, pausedTaskId, currentTaskId, lastCurrentTask]) =>
+        action.taskId
+          ? action.taskId !== currentTaskId
+          : !currentTaskId && (!!pausedTaskId || !!lastCurrentTask),
       ),
-      switchMap(([_action, pausedTaskId, _currentTaskId, lastCurrentTask]) => {
-        // Prefer pausedTaskId, fall back to lastCurrentTask
-        const taskIdToResume = pausedTaskId || lastCurrentTask?.id;
+      switchMap(([action, pausedTaskId, _currentTaskId, lastCurrentTask]) => {
+        // Prefer an explicit selection, then pausedTaskId, then lastCurrentTask.
+        const taskIdToResume = action.taskId || pausedTaskId || lastCurrentTask?.id;
         if (!taskIdToResume) return EMPTY;
 
         return this.store.select(selectTaskById, { id: taskIdToResume }).pipe(
           take(1),
-          map((task) =>
+          switchMap((task) =>
             task && !task.isDone
-              ? setCurrentTask({ id: taskIdToResume })
-              : actions.showFocusOverlay(),
+              ? of(setCurrentTask({ id: taskIdToResume }))
+              : action.taskId
+                ? of(actions.selectFocusTask())
+                : of(actions.showFocusOverlay()),
           ),
         );
       }),
@@ -291,19 +299,46 @@ export class FocusModeEffects {
     () =>
       this.store.select(selectors.selectTimer).pipe(
         skipWhileApplyingRemoteOps(),
-        filter(
-          (timer) =>
-            timer.purpose === 'break' &&
-            !timer.isRunning &&
-            timer.startedAt !== null &&
-            timer.elapsed >= timer.duration,
-        ),
+        filter((timer) => selectors.selectIsBreakTimeUp.projector(timer)),
         distinctUntilChanged(
           (prev, curr) =>
             prev.elapsed === curr.elapsed && prev.startedAt === curr.startedAt,
         ),
         tap(() => {
-          this._notifyUser();
+          // When the looping break-end alarm is enabled it owns the break-end
+          // sound (breakEndAlarmSound$); skip the one-shot here so they don't
+          // double up. The window focus/flash still fires.
+          this._notifyUser(false, this._isLoopBreakEndAlarmOn());
+        }),
+      ),
+    { dispatch: false },
+  );
+
+  // Loop the break-end sound until the break is dismissed, when the user has
+  // opted in (per-device setting — see FocusModeLocalSettingsService / #8593).
+  // Mirrors whiteNoiseSound$: a single selector-based effect owns the loop
+  // lifecycle, so any leave-break transition (completeBreak / skipBreak /
+  // starting the next session — all of which flip timer.purpose away from
+  // 'break' or set it running again) naturally stops the loop via
+  // distinctUntilChanged. A hard safety ceiling inside startBreakEndAlarm()
+  // stops it regardless if the user truly walked away.
+  breakEndAlarmSound$ = createEffect(
+    () =>
+      this.store.select(selectors.selectTimer).pipe(
+        skipWhileApplyingRemoteOps(),
+        map(
+          (timer) =>
+            selectors.selectIsBreakTimeUp.projector(timer) &&
+            this._isLoopBreakEndAlarmOn(),
+        ),
+        distinctUntilChanged(),
+        tap((shouldAlarm) => {
+          if (shouldAlarm) {
+            const soundVolume = this.globalConfigService.sound()?.volume || 0;
+            startBreakEndAlarm(SESSION_DONE_SOUND, soundVolume);
+          } else {
+            stopBreakEndAlarm();
+          }
         }),
       ),
     { dispatch: false },
@@ -665,9 +700,10 @@ export class FocusModeEffects {
       this.actions$.pipe(
         ofType(actions.startBreak),
         tap(() => {
-          // Signal TakeABreakService to reset its timer
-          // otherNoBreakTIme$ feeds into the break timer's tick stream
-          this.takeABreakService.otherNoBreakTIme$.next(0);
+          // Signal TakeABreakService to reset its timer. Must be resetTimer()
+          // rather than otherNoBreakTIme$.next(0): the latter only zeroes the
+          // counter and skips the reminder teardown, leaving a stale banner up.
+          this.takeABreakService.resetTimer();
         }),
       ),
     { dispatch: false },
@@ -833,6 +869,7 @@ export class FocusModeEffects {
             actions.completeBreak,
             actions.completeFocusSession,
             actions.cancelFocusSession,
+            actions.selectFocusTask,
           ),
           // Throttle to prevent excessive IPC calls (timer ticks every 1s)
           // Use leading + trailing to ensure immediate feedback and final state
@@ -919,11 +956,18 @@ export class FocusModeEffects {
     { dispatch: false },
   );
 
-  private _notifyUser(isHideBar = false): void {
+  private _isLoopBreakEndAlarmOn(): boolean {
+    return (
+      this.focusModeLocalSettingsService.settings().isLoopBreakEndAlarm &&
+      (this.globalConfigService.sound()?.volume || 0) > 0
+    );
+  }
+
+  private _notifyUser(isHideBar = false, isSkipSound = false): void {
     const soundVolume = this.globalConfigService.sound()?.volume || 0;
 
-    // Play sound if enabled
-    if (soundVolume > 0) {
+    // Play sound if enabled (skipped when the looping break-end alarm owns it)
+    if (!isSkipSound && soundVolume > 0) {
       playSound(SESSION_DONE_SOUND, soundVolume);
     }
 

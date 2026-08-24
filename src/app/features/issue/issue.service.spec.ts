@@ -494,6 +494,65 @@ describe('IssueService', () => {
     });
   });
 
+  describe('addTaskFromIssue - auto-import tag inheritance (#8673)', () => {
+    const jiraIssue = { id: 'JIRA-8673', title: 'Auto Import' };
+
+    const setActiveTag = (tagId: string): void => {
+      Object.defineProperty(workContextServiceSpy, 'activeWorkContextType', {
+        get: () => WorkContextType.TAG,
+        configurable: true,
+      });
+      Object.defineProperty(workContextServiceSpy, 'activeWorkContextId', {
+        get: () => tagId,
+        configurable: true,
+      });
+    };
+
+    beforeEach(() => {
+      taskServiceSpy.checkForTaskWithIssueEverywhere.and.resolveTo(null);
+      taskServiceSpy.add.and.returnValue('new-task-id');
+      (service.ISSUE_SERVICE_MAP['JIRA'] as any).getAddTaskData = () => ({
+        title: 'Auto Import',
+      });
+      issueProviderServiceSpy.getCfgOnce$.and.returnValue(
+        of({
+          defaultProjectId: 'proj-1',
+          defaultTagIds: ['default-tag'],
+        } as any),
+      );
+      // Auto-imports always target the backlog; the leak only surfaces via the
+      // non-PROJECT branch, i.e. while a non-Today tag is the active context.
+      setActiveTag('errands-tag');
+    });
+
+    it('inherits the ambient tag for a foreground import (isAutoImport unset)', async () => {
+      await service.addTaskFromIssue({
+        issueDataReduced: jiraIssue as any,
+        issueProviderId: 'jira-provider-1',
+        issueProviderKey: 'JIRA',
+        isAddToBacklog: true,
+      });
+
+      const taskData = taskServiceSpy.add.calls.mostRecent().args[2] as Partial<Task>;
+      expect(taskData.tagIds).toEqual(['errands-tag', 'default-tag']);
+      expect(taskData.projectId).toBe('proj-1');
+    });
+
+    it('does NOT inherit the ambient tag for an automatic import', async () => {
+      await service.addTaskFromIssue({
+        issueDataReduced: jiraIssue as any,
+        issueProviderId: 'jira-provider-1',
+        issueProviderKey: 'JIRA',
+        isAddToBacklog: true,
+        isAutoImport: true,
+      });
+
+      const taskData = taskServiceSpy.add.calls.mostRecent().args[2] as Partial<Task>;
+      expect(taskData.tagIds).toEqual(['default-tag']);
+      expect(taskData.projectId).toBe('proj-1');
+    });
+  });
+
   describe('addTaskFromIssue - CalDAV sub-task / archived-parent path', () => {
     const caldavIssue = {
       id: 'child-uid',
@@ -726,123 +785,6 @@ describe('IssueService', () => {
           msg: T.F.TASK.S.FOUND_MOVE_FROM_BACKLOG,
         }),
       );
-    });
-  });
-
-  describe('refreshIssueTasks - orphaned task auto-removal', () => {
-    const provider = { id: 'p1', issueProviderKey: 'PLAINSPACE' } as any;
-
-    const mkTask = (overrides: Partial<Task> = {}): Task =>
-      ({
-        id: `task-${overrides.issueId ?? 'x'}`,
-        title: 'Imported',
-        issueId: 'i1',
-        issueType: 'PLAINSPACE',
-        issueProviderId: 'p1',
-        timeSpent: 0,
-        timeSpentOnDay: {},
-        subTaskIds: [],
-        attachments: [],
-        tagIds: [],
-        projectId: 'project-1',
-        ...overrides,
-      }) as Task;
-
-    let plainspaceMock: any;
-
-    beforeEach(() => {
-      plainspaceMock = service.ISSUE_SERVICE_MAP['PLAINSPACE'];
-      plainspaceMock.getFreshDataForIssueTasks = jasmine
-        .createSpy('getFreshDataForIssueTasks')
-        .and.resolveTo([]);
-    });
-
-    it('removes a deleted task that has no local content', async () => {
-      const gone = mkTask({ issueId: 'gone', id: 'task-gone' });
-      plainspaceMock.getRemovedRemoteTasks = jasmine
-        .createSpy('getRemovedRemoteTasks')
-        .and.resolveTo([gone]);
-
-      await service.refreshIssueTasks([gone], provider);
-
-      expect(taskServiceSpy.remove).toHaveBeenCalledTimes(1);
-      const removed = taskServiceSpy.remove.calls.mostRecent().args[0];
-      expect(removed.id).toBe('task-gone');
-      expect(removed.subTasks).toEqual([]);
-    });
-
-    it('keeps a deleted task that has tracked time', async () => {
-      const tracked = mkTask({
-        issueId: 'tracked',
-        id: 'task-tracked',
-        timeSpent: 60000,
-      });
-      plainspaceMock.getRemovedRemoteTasks = jasmine
-        .createSpy('getRemovedRemoteTasks')
-        .and.resolveTo([tracked]);
-
-      await service.refreshIssueTasks([tracked], provider);
-
-      expect(taskServiceSpy.remove).not.toHaveBeenCalled();
-    });
-
-    (
-      [
-        ['notes', { notes: 'a thought' }],
-        ['sub-tasks', { subTaskIds: ['sub-1'] }],
-        ['attachments', { attachments: [{ id: 'a' } as any] }],
-        ['a repeat config', { repeatCfgId: 'repeat-1' }],
-        ['a done state', { isDone: true }],
-      ] as [string, Partial<Task>][]
-    ).forEach(([label, extra]) => {
-      it(`keeps a deleted task that has local ${label}`, async () => {
-        const task = mkTask({ issueId: 'kept', id: 'task-kept', ...extra });
-        plainspaceMock.getRemovedRemoteTasks = jasmine
-          .createSpy('getRemovedRemoteTasks')
-          .and.resolveTo([task]);
-
-        await service.refreshIssueTasks([task], provider);
-
-        expect(taskServiceSpy.remove).not.toHaveBeenCalled();
-      });
-    });
-
-    it('does not remove anything when the provider reports no deletions', async () => {
-      const alive = mkTask({ issueId: 'alive', id: 'task-alive' });
-      plainspaceMock.getRemovedRemoteTasks = jasmine
-        .createSpy('getRemovedRemoteTasks')
-        .and.resolveTo([]);
-
-      await service.refreshIssueTasks([alive], provider);
-
-      expect(taskServiceSpy.remove).not.toHaveBeenCalled();
-    });
-
-    it('does not throw if detection fails (poll stays alive)', async () => {
-      const gone = mkTask({ issueId: 'gone', id: 'task-gone' });
-      plainspaceMock.getRemovedRemoteTasks = jasmine
-        .createSpy('getRemovedRemoteTasks')
-        .and.rejectWith(new Error('network down'));
-
-      await expectAsync(service.refreshIssueTasks([gone], provider)).toBeResolved();
-      expect(taskServiceSpy.remove).not.toHaveBeenCalled();
-    });
-
-    it('removes several orphans in ONE bulk op (not N deleteTask dispatches)', async () => {
-      const a = mkTask({ issueId: 'a', id: 'task-a' });
-      const b = mkTask({ issueId: 'b', id: 'task-b' });
-      plainspaceMock.getRemovedRemoteTasks = jasmine
-        .createSpy('getRemovedRemoteTasks')
-        .and.resolveTo([a, b]);
-
-      await service.refreshIssueTasks([a, b], provider);
-
-      expect(taskServiceSpy.remove).not.toHaveBeenCalled();
-      expect(taskServiceSpy.removeMultipleTasks).toHaveBeenCalledTimes(1);
-      expect(taskServiceSpy.removeMultipleTasks).toHaveBeenCalledWith([
-        'task-a',
-        'task-b',
-      ]);
     });
   });
 });

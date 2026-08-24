@@ -295,23 +295,35 @@ export const vectorClockPruned$ = new Subject<{
  * Wraps the shared implementation from @sp/sync-core with client-side logging.
  *
  * @param clock The vector clock to limit
- * @param currentClientId The current client's ID (always preserved)
+ * @param preserveClientIds Client IDs to always keep when present — the current
+ *   client, plus the latest full-state import author so post-import ops keep
+ *   proving causal knowledge of the import (#9096)
  * @returns A vector clock with at most MAX_VECTOR_CLOCK_SIZE entries
  */
 export const limitVectorClockSize = (
   clock: VectorClock,
-  currentClientId: string,
+  preserveClientIds: string[],
 ): VectorClock => {
   const entries = Object.entries(clock);
   if (entries.length <= MAX_VECTOR_CLOCK_SIZE) {
     return clock;
   }
 
-  OpLog.info('Vector clock pruning triggered', {
+  const limited = sharedLimitVectorClockSize(clock, preserveClientIds);
+  const prunedIds = Object.keys(clock).filter((id) => !(id in limited));
+
+  // WARN (not info): pruning is meant to be rare, so when it fires it is worth
+  // surfacing in the exported log history users share in bug reports (see issue
+  // #8696). clientIds are safe to log — they are not user content — and knowing
+  // which identities keep churning is the key diagnostic for stale-device
+  // accumulation.
+  OpLog.warn('Vector clock pruning triggered', {
     originalSize: entries.length,
     maxSize: MAX_VECTOR_CLOCK_SIZE,
-    currentClientId,
-    pruned: entries.length - MAX_VECTOR_CLOCK_SIZE,
+    preserveClientIds,
+    prunedCount: prunedIds.length,
+    prunedIds,
+    survivingIds: Object.keys(limited),
   });
 
   vectorClockPruned$.next({
@@ -319,5 +331,5 @@ export const limitVectorClockSize = (
     maxSize: MAX_VECTOR_CLOCK_SIZE,
   });
 
-  return sharedLimitVectorClockSize(clock, [currentClientId]);
+  return limited;
 };

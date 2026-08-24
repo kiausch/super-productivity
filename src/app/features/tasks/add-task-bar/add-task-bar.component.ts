@@ -58,6 +58,9 @@ import {
 import { MatProgressSpinner } from '@angular/material/progress-spinner';
 import { AddTaskSuggestion } from './add-task-suggestions.model';
 import { IssueIconPipe } from '../../issue/issue-icon/issue-icon.pipe';
+
+// Event emitted when a task is added
+export type TaskAddEvent = { taskId: string; isAddToBottom: boolean; isNewTask: boolean };
 import { TagComponent } from '../../tag/tag/tag.component';
 import { truncate } from '../../../util/truncate';
 import { SnackService } from '../../../core/snack/snack.service';
@@ -149,7 +152,7 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
   planForDay = input<string>();
 
   // Outputs
-  afterTaskAdd = output<{ taskId: string; isAddToBottom: boolean }>();
+  afterTaskAdd = output<TaskAddEvent>();
   closed = output<void>();
   done = output<void>();
 
@@ -194,6 +197,79 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
       count++;
     }
     return count;
+  });
+
+  highlightSegments = computed(() => {
+    if (this.isSearchMode()) {
+      return [];
+    }
+
+    const currentText = this.stateService.inputTxt();
+    const highlight = this.stateService.syntaxHighlight();
+
+    if (!highlight || !highlight.ranges || highlight.ranges.length === 0) {
+      return currentText.length > 0 ? [{ text: currentText, type: null }] : [];
+    }
+
+    // If ranges are for a different text, check if they're still applicable
+    let ranges = highlight.ranges;
+    if (highlight.forText !== currentText) {
+      // Check for common prefix
+      let commonPrefixLen = 0;
+      for (let i = 0; i < Math.min(highlight.forText.length, currentText.length); i++) {
+        if (highlight.forText[i] === currentText[i]) {
+          commonPrefixLen++;
+        } else {
+          break;
+        }
+      }
+
+      // Keep only ranges that are within the common prefix
+      ranges = ranges.filter(
+        (range) => range.start < commonPrefixLen && range.end <= commonPrefixLen,
+      );
+
+      // If no ranges are in the common prefix, treat entire text as unstyled
+      if (ranges.length === 0) {
+        return currentText.length > 0 ? [{ text: currentText, type: null }] : [];
+      }
+    }
+
+    // Split text into segments based on ranges
+    const segments: Array<{ text: string; type: string | null }> = [];
+    let lastEnd = 0;
+
+    for (const range of ranges) {
+      // Add text before this range
+      if (range.start > lastEnd) {
+        segments.push({
+          text: currentText.substring(lastEnd, range.start),
+          type: null,
+        });
+      }
+
+      // Add the range itself
+      segments.push({
+        text: currentText.substring(range.start, range.end),
+        type: range.type,
+      });
+
+      lastEnd = range.end;
+    }
+
+    // Add remaining text after last range
+    if (lastEnd < currentText.length) {
+      segments.push({
+        text: currentText.substring(lastEnd),
+        type: null,
+      });
+    }
+
+    return segments;
+  });
+
+  isSubmitVisible = computed(() => {
+    return this.stateService.inputTxt().length > 0;
   });
 
   defaultProject$ = combineLatest([
@@ -499,7 +575,7 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
         } else {
           taskData.dueDay = state.date;
         }
-      } else if (state.repeatQuickSetting && state.repeatQuickSetting !== 'CUSTOM') {
+      } else if (state.repeat && state.repeat.type !== 'DIALOG') {
         // When a repeat preset is selected without an explicit date, set dueDay to today
         // so the first task instance appears as today's occurrence instead of staying in inbox
         taskData.dueDay = this._dateService.todayStr();
@@ -526,8 +602,8 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
       // effect already handles scheduling via scheduleTaskWithTime, so calling both
       // would cause double-scheduling.
       const isTimedRepeatTask =
-        !!state.repeatQuickSetting &&
-        state.repeatQuickSetting !== 'CUSTOM' &&
+        !!state.repeat &&
+        state.repeat.type !== 'DIALOG' &&
         !!state.time;
 
       // Dispatch sessions for time already spent (from short-syntax, e.g. "task 1h")
@@ -554,20 +630,33 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
       }
 
       // Create repeat config if a repeat setting was selected
-      if (state.repeatQuickSetting) {
-        if (state.repeatQuickSetting === 'CUSTOM') {
+      if (state.repeat) {
+        if (state.repeat.type === 'DIALOG') {
           this._openRepeatDialogForTask(taskId, resolvedRemindOption);
-        } else {
+        } else if (state.repeat.type === 'PRESET') {
           const startDate = state.date || this._dateService.todayStr();
           const referenceDate = dateStrToUtcDate(startDate);
           const quickSettingUpdates =
-            getQuickSettingUpdates(state.repeatQuickSetting, referenceDate) || {};
+            getQuickSettingUpdates(state.repeat.quickSetting, referenceDate) || {};
           this._taskRepeatCfgService.addTaskRepeatCfgToTask(taskId, state.projectId, {
             ...DEFAULT_TASK_REPEAT_CFG,
             startDate,
             ...quickSettingUpdates,
             title,
-            quickSetting: state.repeatQuickSetting,
+            quickSetting: state.repeat.quickSetting,
+            tagIds: taskData.tagIds ?? [],
+            defaultEstimate: state.estimate || 0,
+            startTime: state.time || undefined,
+            remindAt: state.time ? resolvedRemindOption : undefined,
+          });
+        } else if (state.repeat.type === 'INTERVAL') {
+          const startDate = state.date || this._dateService.todayStr();
+          this._taskRepeatCfgService.addTaskRepeatCfgToTask(taskId, state.projectId, {
+            ...DEFAULT_TASK_REPEAT_CFG,
+            startDate,
+            repeatCycle: state.repeat.repeatCycle,
+            repeatEvery: state.repeat.repeatEvery,
+            title,
             tagIds: taskData.tagIds ?? [],
             defaultEstimate: state.estimate || 0,
             startTime: state.time || undefined,
@@ -576,7 +665,7 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
         }
       }
 
-      this.afterTaskAdd.emit({ taskId, isAddToBottom: this.isAddToBottom() });
+      this.afterTaskAdd.emit({ taskId, isAddToBottom: this.isAddToBottom(), isNewTask: true });
       this._resetAfterAdd();
     } finally {
       this._isAddingTask = false;
@@ -666,6 +755,7 @@ export class AddTaskBarComponent implements AfterViewInit, OnInit, OnDestroy {
       this.afterTaskAdd.emit({
         taskId,
         isAddToBottom: false,
+        isNewTask: false,
       });
     }
 

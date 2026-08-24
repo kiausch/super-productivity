@@ -1,5 +1,5 @@
 import { inject, Injectable } from '@angular/core';
-import { createEffect } from '@ngrx/effects';
+import { createEffect, ofType } from '@ngrx/effects';
 import { Action, Store } from '@ngrx/store';
 import { filter, map, pairwise, startWith, tap, withLatestFrom } from 'rxjs/operators';
 import { IS_ANDROID_WEB_VIEW } from '../../../util/is-android-web-view';
@@ -18,12 +18,17 @@ import {
   selectCurrentTaskId,
   selectIsTaskDataLoaded,
 } from '../../tasks/store/task.selectors';
-import { combineLatest, Observable } from 'rxjs';
+import { combineLatest, firstValueFrom, Observable } from 'rxjs';
 import { FocusModeMode, TimerState } from '../../focus-mode/focus-mode.model';
 import { DroidLog } from '../../../core/log';
 import { HydrationStateService } from '../../../op-log/apply/hydration-state.service';
 import { SnackService } from '../../../core/snack/snack.service';
 import { GlobalTrackingIntervalService } from '../../../core/global-tracking-interval/global-tracking-interval.service';
+import { Task } from '../../tasks/task.model';
+import { CapacitorReminderService } from '../../../core/platform/capacitor-reminder.service';
+import { LOCAL_ACTIONS } from '../../../util/local-actions.token';
+
+type FocusNotificationTask = Pick<Task, 'id' | 'title'> | null | undefined;
 
 /**
  * On app resume, fire a single `tick()` so the wall-clock-based focus reducer
@@ -40,9 +45,9 @@ export const createFocusResumeTick$ = (onResume$: Observable<void>): Observable<
  * changes need no push at all — and since prev/curr are consecutive per-tick
  * emissions (~1s apart), the 5s gate suppresses them entirely (#8243). Do not
  * weaken it: every push re-runs startForeground + a notification rebuild.
- * Pause/purpose changes — and the large elapsed jump a resume `tick()`
- * produces (#7856) — must propagate immediately so the notification
- * reconciles with the corrected in-app countdown. (The 5000 here and
+ * Pause/purpose and displayed-task changes — and the large elapsed jump a
+ * resume `tick()` produces (#7856) — must propagate immediately so the
+ * notification reconciles with the corrected in-app state. (The 5000 here and
  * TIME_SPENT_JUMP_THRESHOLD_MS in android-foreground-tracking.effects.ts
  * encode the same "larger than any tick" idea but differ in semantics —
  * abs() vs decrease-always-passes — so they are deliberately not shared.)
@@ -50,8 +55,13 @@ export const createFocusResumeTick$ = (onResume$: Observable<void>): Observable<
 export const hasFocusNotificationStateChanged = (
   prevTimer: TimerState | undefined,
   currTimer: TimerState,
+  prevTask?: FocusNotificationTask,
+  currTask?: FocusNotificationTask,
 ): boolean => {
   if (!prevTimer) return true;
+  // The task title is part of the native notification payload, even though the
+  // focus timer itself is unchanged when tracking switches to another task.
+  if (prevTask?.id !== currTask?.id || prevTask?.title !== currTask?.title) return true;
   // Pause state changed
   if (prevTimer.isRunning !== currTimer.isRunning) return true;
   // Purpose changed (work -> break or vice versa)
@@ -61,20 +71,63 @@ export const hasFocusNotificationStateChanged = (
 };
 
 /**
+ * Wall-clock slack (ms) for the "session has reached its scheduled end" check
+ * below. The native completion arrives at (or, after bridge/broadcast latency,
+ * just past) `startedAt + duration`, so a small positive slack absorbs latency
+ * and clock jitter without ever admitting the #8805 stale-completion case — a
+ * freshly-started session sits minutes away from its end, not seconds.
+ */
+const NATIVE_COMPLETE_TOLERANCE_MS = 2000;
+
+/**
  * Whether a native timer-complete event should drive a state change. The native
  * foreground service fires this when its countdown reaches 0; we act on it only
- * while the matching session is still active in app state — a break event needs an
- * active break, a work event needs a still-running work session. The work guard is
- * what makes the native completion a no-op once a resume `tick()` has already
- * completed the session on return from the background (#7856), so the two never
- * double-complete. Pure + exported so the `IS_ANDROID_WEB_VIEW`-gated effect's guard
- * is unit-testable.
+ * while the matching session is still active in app state (a break event needs an
+ * active break, a work event a still-running work session) AND that session has
+ * actually reached its scheduled end by the WALL CLOCK (`now - startedAt >=
+ * duration`).
+ *
+ * The purpose/isRunning guard makes a work completion a no-op once a resume
+ * `tick()` has already completed the session on return from the background
+ * (#7856), so the two never double-complete.
+ *
+ * The wall-clock guard additionally rejects a STALE or duplicate native
+ * completion that lands on a *different*, still-running session than the one it
+ * was fired for — e.g. the work session the user just started by advancing from a
+ * break with the "next session" arrow. Without it that fresh session is completed
+ * immediately, and in Pomodoro completing a work session auto-spawns a break, so
+ * the arrow appears to "start another break" instead of the session (#8805). We
+ * compare against the wall clock rather than the stored `timer.elapsed` because a
+ * backgrounded session's `elapsed` is frozen and stale, whereas `now - startedAt`
+ * stays accurate — the same basis the reducer's `tick` uses (`elapsed =
+ * Date.now() - startedAt`), so a genuine over-run completion on resume (#7856)
+ * still passes even though its last in-app tick is far behind.
+ *
+ * `now` is injectable so the guard stays deterministically unit-testable.
  */
 export const shouldHandleNativeTimerComplete = (
   isBreak: boolean,
   timer: TimerState,
-): boolean =>
-  isBreak ? timer.purpose === 'break' : timer.purpose === 'work' && timer.isRunning;
+  now: number = Date.now(),
+): boolean => {
+  // Must match the kind of session the event was fired for.
+  if (isBreak ? timer.purpose !== 'break' : timer.purpose !== 'work') {
+    return false;
+  }
+  // A work completion is void once the in-app tick already stopped the session
+  // (#7856). Breaks keep their prior semantics (no isRunning requirement): a
+  // finished break stays on-screen, stopped, until the user leaves it.
+  if (!isBreak && !timer.isRunning) {
+    return false;
+  }
+  // A running timer always has a startedAt, and fixed-duration timers have
+  // duration > 0 (Flowtime work — duration 0 — never schedules a native
+  // completion, so it never reaches here); guard defensively regardless.
+  if (timer.startedAt == null || timer.duration <= 0) {
+    return false;
+  }
+  return now - timer.startedAt >= timer.duration - NATIVE_COMPLETE_TOLERANCE_MS;
+};
 
 export type NativeFocusModeData = {
   durationMs: number;
@@ -139,6 +192,39 @@ export class AndroidFocusModeEffects {
   private _hydrationState = inject(HydrationStateService);
   private _snackService = inject(SnackService);
   private _globalTrackingInterval = inject(GlobalTrackingIntervalService);
+  private _reminderService = inject(CapacitorReminderService);
+  private _actions$ = inject(LOCAL_ACTIONS);
+
+  /**
+   * Ask for notification permission when the user STARTS a focus session.
+   *
+   * Action-based on purpose: `syncFocusModeToNotification$` also reaches its
+   * start branch via `restoreFocusSessionFromNative` on cold start (see
+   * `recoverFocusSession$`), and prompting there would put an OS dialog on the
+   * launch path — the unprompted launch-time prompt #8120 removed. Only
+   * `startFocusSession` is genuinely user-initiated. See #9648.
+   *
+   * Not awaited — see the re-post rationale on
+   * `_repostFocusNotificationAfterGrant()`.
+   */
+  requestNotificationPermissionOnFocusStart$ =
+    IS_ANDROID_WEB_VIEW &&
+    createEffect(
+      () =>
+        this._actions$.pipe(
+          ofType(focusModeActions.startFocusSession),
+          tap(() => {
+            void this._reminderService
+              .requestPermissionsInBackground()
+              .then((isNewlyGranted) => {
+                if (isNewlyGranted) {
+                  void this._repostFocusNotificationAfterGrant();
+                }
+              });
+          }),
+        ),
+      { dispatch: false },
+    );
 
   // Start/stop focus mode notification when timer state changes
   syncFocusModeToNotification$ =
@@ -210,7 +296,14 @@ export class AndroidFocusModeEffects {
                   'Failed to start focus mode notification',
                   true,
                 );
-              } else if (hasFocusNotificationStateChanged(prev?.timer, timer)) {
+              } else if (
+                hasFocusNotificationStateChanged(
+                  prev?.timer,
+                  timer,
+                  prev?.currentTask,
+                  currentTask,
+                )
+              ) {
                 // Only update if something significant changed
                 DroidLog.log('AndroidFocusModeEffects: Updating focus mode service', {
                   title,
@@ -409,6 +502,59 @@ export class AndroidFocusModeEffects {
     }
     const tick = this._globalTrackingInterval.triggerWakeUpTick();
     return timer.elapsed + tick.duration;
+  }
+
+  /**
+   * Re-post the focus notification after a late POST_NOTIFICATIONS grant.
+   *
+   * `startForeground()` already ran while the permission was denied, so Android
+   * dropped that notification and does not replay it. The notification renders
+   * its countdown via a native chronometer, so steady-state elapsed changes
+   * push NO updates at all (`hasFocusNotificationStateChanged` suppresses
+   * consecutive ~1s ticks entirely, #8243) — without this re-post, the
+   * first-ever focus session would stay notification-less until a pause, break
+   * transition, task switch, or resume-tick jump. Mirrors
+   * `_repostTrackingNotificationAfterGrant` in
+   * android-foreground-tracking.effects.ts (#9648).
+   *
+   * Reads the CURRENT timer state rather than values captured at start: the
+   * native service re-anchors its countdown to the pushed remainingMs, so a
+   * stale value would rewind it by the dialog duration. If the session ended
+   * while the dialog was open, purpose is null (skip below) — and the native
+   * side additionally ignores ACTION_UPDATE when the service is not running.
+   */
+  private async _repostFocusNotificationAfterGrant(): Promise<void> {
+    const [timer, mode, currentTask, isBreakActive, isLongBreak, timeRemaining] =
+      await firstValueFrom(
+        combineLatest([
+          this._store.select(selectTimer),
+          this._store.select(selectMode),
+          this._store.select(selectCurrentTask),
+          this._store.select(selectIsBreakActive),
+          this._store.select(selectIsLongBreak),
+          this._store.select(selectTimeRemaining),
+        ]),
+      );
+    if (timer.purpose === null) {
+      return;
+    }
+    const title = this._getNotificationTitle(mode, isBreakActive, isLongBreak);
+    const remainingMs = timer.duration > 0 ? timeRemaining : timer.elapsed; // Flowtime shows elapsed
+    DroidLog.log('AndroidFocusModeEffects: Re-posting notification after grant', {
+      title,
+      remaining: remainingMs,
+    });
+    this._safeNativeCall(
+      () =>
+        androidInterface.updateFocusModeService?.(
+          title,
+          remainingMs,
+          !timer.isRunning,
+          isBreakActive,
+          currentTask?.title || null,
+        ),
+      'Failed to re-post focus notification after permission grant',
+    );
   }
 
   private _safeNativeCall(fn: () => void, errorMsg: string, showSnackbar = false): void {

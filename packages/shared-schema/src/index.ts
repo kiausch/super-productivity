@@ -2,7 +2,7 @@
 export {
   CURRENT_SCHEMA_VERSION,
   MIN_SUPPORTED_SCHEMA_VERSION,
-  MAX_VERSION_SKIP,
+  PROJECT_DELETE_WINS_SCHEMA_VERSION,
 } from './schema-version';
 
 // Types
@@ -55,6 +55,9 @@ export {
   SuperSyncSnapshotResponseSchema,
   SuperSyncSnapshotUploadResponseSchema,
   SuperSyncStatusResponseSchema,
+  SuperSyncDeviceSchema,
+  SuperSyncDevicesResponseSchema,
+  SuperSyncReplaceTokenResponseSchema,
   SuperSyncRestorePointSchema,
   SuperSyncRestorePointsResponseSchema,
   SuperSyncRestoreSnapshotResponseSchema,
@@ -76,6 +79,9 @@ export type {
   SuperSyncSnapshotResponse,
   SuperSyncSnapshotUploadResponse,
   SuperSyncStatusResponse,
+  SuperSyncDevice,
+  SuperSyncDevicesResponse,
+  SuperSyncReplaceTokenResponse,
   SuperSyncRestorePoint,
   SuperSyncRestorePointsResponse,
   SuperSyncRestoreSnapshotResponse,

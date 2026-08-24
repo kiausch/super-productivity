@@ -54,6 +54,7 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     isConfirmBeforeExitWithoutFinishDay: true,
     isMinimizeToTray: false,
     isLocalRestApiEnabled: false,
+    isCheckForUpdates: true,
     isTrayShowCurrentCountdown: true,
     startOfNextDay: 0,
     startOfNextDayTime: '00:00',
@@ -69,10 +70,13 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     isShowProductivityTipLonger: false,
     customTheme: 'default',
     defaultStartPage: 0,
+    backgroundImageDark: null,
+    backgroundImageLight: null,
   },
   shortSyntax: {
     isEnableProject: true,
     isEnableDue: true,
+    isEnableDeadline: false,
     isEnableTag: true,
     urlBehavior: 'keep',
   },
@@ -81,6 +85,7 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
   },
   idle: {
     isOnlyOpenIdleWhenCurrentTask: false,
+    isSuppressIdleDuringFocusMode: false,
     isEnableIdleTimeTracking: true,
     minIdleTime: 5 * minute,
   },
@@ -106,6 +111,7 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
   },
   focusMode: {
     isSkipPreparation: false,
+    isShowPreparation: false,
     isPlayTick: false,
     focusModeSound: 'off',
     isPauseTrackingDuringBreak: true,
@@ -230,6 +236,8 @@ export const DEFAULT_GLOBAL_CONFIG: GlobalConfigState = {
     // TODO maybe enable later if it works well
     isCompressionEnabled: false,
     isEncryptionEnabled: false,
+    // SPAP-11: opt-in split-file ("Surgical") sync. Default OFF (single-file v2).
+    isUseSplitSyncFiles: false,
     encryptKey: null,
     syncProvider: null,
     syncInterval: minute,

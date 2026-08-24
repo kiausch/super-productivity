@@ -15,9 +15,17 @@ describe('PlainspaceSyncAdapterService', () => {
     spaceId: 'space-1',
     token: 'pat_x',
   };
+  const patchedIssue = {
+    id: 't1',
+    isDone: true,
+  };
 
   beforeEach(() => {
-    api = jasmine.createSpyObj('PlainspaceApiService', ['getById$', 'patchTask$']);
+    api = jasmine.createSpyObj('PlainspaceApiService', [
+      'getById$',
+      'patchTask$',
+      'createTask$',
+    ]);
     TestBed.configureTestingModule({
       providers: [
         PlainspaceSyncAdapterService,
@@ -27,11 +35,11 @@ describe('PlainspaceSyncAdapterService', () => {
     adapter = TestBed.inject(PlainspaceSyncAdapterService);
   });
 
-  it('maps isDone, title and dueWithTime, all push-only', () => {
+  it('pushes completion but only pulls title and schedule', () => {
     expect(adapter.getSyncConfig(cfg)).toEqual({
       isDone: 'pushOnly',
-      title: 'pushOnly',
-      dueWithTime: 'pushOnly',
+      title: 'pullOnly',
+      dueWithTime: 'pullOnly',
     });
     const mappings = adapter.getFieldMappings();
     expect(mappings.map((m) => [m.taskField, m.issueField])).toEqual([
@@ -39,7 +47,11 @@ describe('PlainspaceSyncAdapterService', () => {
       ['title', 'title'],
       ['dueWithTime', 'scheduledAt'],
     ]);
-    expect(mappings.every((m) => m.defaultDirection === 'pushOnly')).toBe(true);
+    expect(mappings.map((m) => m.defaultDirection)).toEqual([
+      'pushOnly',
+      'pullOnly',
+      'pullOnly',
+    ]);
   });
 
   it('dueWithTime <-> scheduledAt maps epoch-ms to ISO and back', () => {
@@ -52,49 +64,90 @@ describe('PlainspaceSyncAdapterService', () => {
     expect(m.toTaskValue(null, { issueId: 't1' })).toBeUndefined();
   });
 
-  it('pushChanges PATCHes the done state', async () => {
-    api.patchTask$.and.returnValue(of(null));
+  it('pushChanges PATCHes only the completion state for complete and reopen', async () => {
+    api.patchTask$.and.returnValue(of(patchedIssue));
     await adapter.pushChanges('t1', { isDone: true }, cfg);
     expect(api.patchTask$).toHaveBeenCalledWith('t1', { done: true }, cfg);
-  });
 
-  it('pushChanges PATCHes a renamed title', async () => {
-    api.patchTask$.and.returnValue(of(null));
-    await adapter.pushChanges('t1', { title: 'New name' }, cfg);
-    expect(api.patchTask$).toHaveBeenCalledWith('t1', { title: 'New name' }, cfg);
-  });
-
-  it('pushChanges PATCHes scheduledAt, including null to unschedule', async () => {
-    api.patchTask$.and.returnValue(of(null));
-    await adapter.pushChanges('t1', { scheduledAt: '2026-01-02T09:00:00.000Z' }, cfg);
-    expect(api.patchTask$).toHaveBeenCalledWith(
-      't1',
-      { scheduledAt: '2026-01-02T09:00:00.000Z' },
-      cfg,
-    );
     api.patchTask$.calls.reset();
-    await adapter.pushChanges('t1', { scheduledAt: null }, cfg);
-    expect(api.patchTask$).toHaveBeenCalledWith('t1', { scheduledAt: null }, cfg);
+    api.patchTask$.and.returnValue(of({ ...patchedIssue, isDone: false }));
+    await adapter.pushChanges('t1', { isDone: false }, cfg);
+    expect(api.patchTask$).toHaveBeenCalledWith('t1', { done: false }, cfg);
   });
 
-  it('pushChanges collapses done + scheduledAt into a single PATCH', async () => {
-    api.patchTask$.and.returnValue(of(null));
+  it('pushChanges ignores local title and schedule changes', async () => {
     await adapter.pushChanges(
       't1',
-      { isDone: true, scheduledAt: '2026-01-02T09:00:00.000Z' },
+      { title: 'New name', scheduledAt: '2026-01-02T09:00:00.000Z' },
+      cfg,
+    );
+    expect(api.patchTask$).not.toHaveBeenCalled();
+  });
+
+  it('pushChanges omits pull-only fields when completion changes too', async () => {
+    api.patchTask$.and.returnValue(of(patchedIssue));
+    await adapter.pushChanges(
+      't1',
+      {
+        isDone: true,
+        title: 'New name',
+        scheduledAt: '2026-01-02T09:00:00.000Z',
+      },
       cfg,
     );
     expect(api.patchTask$).toHaveBeenCalledTimes(1);
-    expect(api.patchTask$).toHaveBeenCalledWith(
-      't1',
-      { done: true, scheduledAt: '2026-01-02T09:00:00.000Z' },
-      cfg,
-    );
+    expect(api.patchTask$).toHaveBeenCalledWith('t1', { done: true }, cfg);
+  });
+
+  it('pushChanges rejects a failed completion PATCH', async () => {
+    api.patchTask$.and.returnValue(of(null));
+
+    await expectAsync(adapter.pushChanges('t1', { isDone: true }, cfg)).toBeRejected();
+  });
+
+  it('pushChanges rejects a response that does not confirm completion', async () => {
+    api.patchTask$.and.returnValue(of({ ...patchedIssue, isDone: false }));
+
+    await expectAsync(adapter.pushChanges('t1', { isDone: true }, cfg)).toBeRejected();
+  });
+
+  it('pushChanges rejects a response for a different task', async () => {
+    api.patchTask$.and.returnValue(of({ ...patchedIssue, id: 'other' }));
+
+    await expectAsync(adapter.pushChanges('t1', { isDone: true }, cfg)).toBeRejected();
   });
 
   it('pushChanges does nothing when no mapped field is in the changes', async () => {
     await adapter.pushChanges('t1', { notes: 'x' }, cfg);
     expect(api.patchTask$).not.toHaveBeenCalled();
+  });
+
+  it('createIssue creates the task and returns id + baseline-seeding issueData', async () => {
+    const created = {
+      id: 'new-1',
+      title: 'Buy milk',
+      isDone: false,
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      url: 'https://plainspace.org/p/item/new-1',
+      projectId: 'space-1',
+      scheduledAt: null,
+      isRecurring: false,
+    };
+    api.createTask$.and.returnValue(of(created));
+
+    const res = await adapter.createIssue('Buy milk', cfg);
+
+    expect(api.createTask$).toHaveBeenCalledWith('Buy milk', cfg);
+    expect(res.issueId).toBe('new-1');
+    // issueData must carry the fields extractSyncValues reads, so the effect can
+    // seed the two-way-sync baseline (else the first push is dropped).
+    expect(adapter.extractSyncValues(res.issueData)).toEqual({
+      isDone: false,
+      title: 'Buy milk',
+      scheduledAt: null,
+    });
+    // No numeric issue number -> the SP title keeps no '#123' prefix.
+    expect((res as { issueNumber?: number }).issueNumber).toBeUndefined();
   });
 
   it('fetchIssue returns the issue, or {} when it is missing', async () => {
@@ -118,15 +171,18 @@ describe('PlainspaceSyncAdapterService', () => {
     expect(await adapter.fetchIssue('missing', cfg)).toEqual({});
   });
 
-  it('extractSyncValues exposes isDone, title and scheduledAt (baseline)', () => {
+  it('extractSyncValues includes completion and pulled field baselines', () => {
     expect(
       adapter.extractSyncValues({
         isDone: true,
         title: 'x',
         scheduledAt: '2026-01-02T09:00:00.000Z',
-        url: 'ignored',
       }),
-    ).toEqual({ isDone: true, title: 'x', scheduledAt: '2026-01-02T09:00:00.000Z' });
+    ).toEqual({
+      isDone: true,
+      title: 'x',
+      scheduledAt: '2026-01-02T09:00:00.000Z',
+    });
   });
 
   it('getIssueLastUpdated parses updatedAt, or 0 when absent', () => {

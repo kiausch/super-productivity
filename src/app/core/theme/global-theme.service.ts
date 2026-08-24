@@ -1,4 +1,5 @@
 import {
+  computed,
   DestroyRef,
   effect,
   EnvironmentInjector,
@@ -11,7 +12,15 @@ import {
 import { takeUntilDestroyed, toObservable, toSignal } from '@angular/core/rxjs-interop';
 import { BodyClass, IS_ELECTRON, IS_GNOME_WAYLAND } from '../../app.constants';
 import { IS_MAC } from '../../util/is-mac';
-import { distinctUntilChanged, map, startWith, switchMap, take } from 'rxjs/operators';
+import {
+  distinctUntilChanged,
+  filter,
+  map,
+  startWith,
+  switchMap,
+  take,
+} from 'rxjs/operators';
+import { NavigationEnd, Router } from '@angular/router';
 import { IS_TOUCH_ONLY } from '../../util/is-touch-only';
 import { MaterialCssVarsService } from 'angular-material-css-vars';
 import { DOCUMENT } from '@angular/common';
@@ -21,6 +30,11 @@ import { ChromeExtensionInterfaceService } from '../chrome-extension-interface/c
 
 import { GlobalConfigService } from '../../features/config/global-config.service';
 import { WorkContextThemeCfg } from '../../features/work-context/work-context.model';
+import {
+  DEFAULT_BACKGROUND_OVERLAY_OPACITY,
+  isBackgroundImageSet,
+  normalizeBackgroundImageBlur,
+} from '../../features/work-context/work-context.const';
 import { WorkContextService } from '../../features/work-context/work-context.service';
 import { combineLatest, fromEvent, Observable, of } from 'rxjs';
 import { IS_FIREFOX } from '../../util/is-firefox';
@@ -42,10 +56,13 @@ import { Keyboard, KeyboardInfo } from '@capacitor/keyboard';
 import { PluginListenerHandle, registerPlugin } from '@capacitor/core';
 import { StatusBar, Style } from '@capacitor/status-bar';
 import { SafeArea } from 'capacitor-plugin-safe-area';
-import { FlexibleConnectedPositionStrategy } from '@angular/cdk/overlay';
+import { patchCdkViewportForSafeArea } from './cdk-safe-area-viewport.util';
 import { LS } from '../persistence/storage-keys.const';
-import { Log } from '../log';
+import { Log, PluginLog } from '../log';
 import { LayoutService } from '../../core-ui/layout/layout.service';
+import { sanitizeIosKeyboardHeight } from './sanitize-ios-keyboard-height.util';
+import { sanitizeSvgIconContent } from '../../util/sanitize-svg-icon.util';
+import { CustomThemeService, getRequiredThemeMode } from './custom-theme.service';
 
 interface NavigationBarPlugin {
   setColor(options: { color: string; style: 'LIGHT' | 'DARK' }): Promise<void>;
@@ -63,7 +80,106 @@ const CSS_VAR_SAFE_AREA_TOP = '--safe-area-inset-top';
 const CSS_VAR_SAFE_AREA_BOTTOM = '--safe-area-inset-bottom';
 const CSS_VAR_SAFE_AREA_LEFT = '--safe-area-inset-left';
 const CSS_VAR_SAFE_AREA_RIGHT = '--safe-area-inset-right';
+const CSS_VAR_SYSTEM_SURFACE = '--system-surface';
 const VIEWPORT_RESIZE_EPSILON_PX = 1;
+const DEFAULT_LIGHT_SYSTEM_SURFACE = '#f8f8f7';
+const DEFAULT_DARK_SYSTEM_SURFACE = '#131314';
+
+/**
+ * Resolve a CSS theme surface to the opaque hex format Android's Color parser
+ * accepts. Transparent, gradient, unresolved, and otherwise invalid values
+ * fall back to the matching Default-theme surface.
+ */
+export const resolveSystemSurfaceColor = (
+  rawColor: string,
+  isDarkMode: boolean,
+): string => {
+  const color = rawColor.trim();
+  const fallback = isDarkMode
+    ? DEFAULT_DARK_SYSTEM_SURFACE
+    : DEFAULT_LIGHT_SYSTEM_SURFACE;
+
+  if (/^#[\da-f]{6}$/i.test(color)) {
+    return color;
+  }
+  if (/^#[\da-f]{3}$/i.test(color)) {
+    return `#${[...color.slice(1)].map((digit) => `${digit}${digit}`).join('')}`;
+  }
+  const rgbMatch = color.match(
+    /^rgb\(\s*(\d{1,3})(?:\s*,\s*|\s+)(\d{1,3})(?:\s*,\s*|\s+)(\d{1,3})\s*\)$/i,
+  );
+  if (rgbMatch) {
+    const channels = rgbMatch.slice(1).map(Number);
+    if (channels.every((channel) => channel <= 255)) {
+      return `#${channels
+        .map((channel) => channel.toString(16).padStart(2, '0'))
+        .join('')}`;
+    }
+  }
+  return fallback;
+};
+
+/** The four wallpaper fields of the app-level (global) background config. */
+export type GlobalWallpaperCfg = Pick<
+  WorkContextThemeCfg,
+  | 'backgroundImageDark'
+  | 'backgroundImageLight'
+  | 'backgroundOverlayOpacity'
+  | 'backgroundImageBlur'
+>;
+
+export interface ResolvedBackground {
+  /** The image to show, or null when no background applies to this URL. */
+  imageUrl: string | null;
+  /** Final CSS overlay opacity (0..0.99) of the resolved image's source. */
+  overlayOpacity: number;
+  /** Blur radius in px of the resolved image's source. */
+  blur: number;
+}
+
+const _styleOf = (
+  theme: GlobalWallpaperCfg,
+): Pick<ResolvedBackground, 'overlayOpacity' | 'blur'> => ({
+  overlayOpacity:
+    (theme.backgroundOverlayOpacity ?? DEFAULT_BACKGROUND_OVERLAY_OPACITY) * 0.01,
+  blur: normalizeBackgroundImageBlur(theme.backgroundImageBlur),
+});
+
+/**
+ * Resolve which background image and styling apply to the current route.
+ *
+ * Precedence: per-context image → global wallpaper → none. Crucially, on
+ * non-work-context routes (Planner, Schedule, Boards, Config, …) the active
+ * work context stays "Today" (the reducer default), so we must never use its
+ * image there — only the global wallpaper. The overlay-opacity and blur travel
+ * with the resolved image so a global wallpaper is never styled by the sticky
+ * context's settings.
+ */
+export const resolveBackground = (
+  contextTheme: WorkContextThemeCfg,
+  globalCfg: GlobalWallpaperCfg,
+  isDarkMode: boolean,
+  url: string,
+): ResolvedBackground => {
+  // Anchor to the path start so a query/fragment containing "/tag/" or
+  // "/project/" can't misclassify a non-context route.
+  const isWorkContextUrl = /^\/(tag|project)\//.test(url);
+  const contextImg = isDarkMode
+    ? contextTheme.backgroundImageDark
+    : contextTheme.backgroundImageLight;
+
+  if (isWorkContextUrl && isBackgroundImageSet(contextImg)) {
+    return { imageUrl: contextImg, ..._styleOf(contextTheme) };
+  }
+
+  const globalImg = isDarkMode
+    ? globalCfg.backgroundImageDark
+    : globalCfg.backgroundImageLight;
+  return {
+    imageUrl: isBackgroundImageSet(globalImg) ? globalImg : null,
+    ..._styleOf(globalCfg),
+  };
+};
 
 @Injectable({ providedIn: 'root' })
 export class GlobalThemeService {
@@ -75,11 +191,13 @@ export class GlobalThemeService {
   private _matIconRegistry = inject(MatIconRegistry);
   private readonly _registeredPluginIcons = new Set<string>();
   private _domSanitizer = inject(DomSanitizer);
+  private _router = inject(Router);
 
   private _chromeExtensionInterfaceService = inject(ChromeExtensionInterfaceService);
   private _imexMetaService = inject(ImexViewService);
   private _http = inject(HttpClient);
   private _platformService = inject(CapacitorPlatformService);
+  private _customThemeService = inject(CustomThemeService);
   private _environmentInjector = inject(EnvironmentInjector);
   private _destroyRef = inject(DestroyRef);
   private _inputIntentService = inject(InputIntentService);
@@ -90,6 +208,10 @@ export class GlobalThemeService {
   private _iosKeyboardHeight = 0;
   private _iosViewportHeightBeforeKeyboard = 0;
   private _iosViewportChangeRaf: number | null = null;
+  // True only when the plugin reported an implausible keyboard frame (the clamp
+  // had to correct it). Gates the measured-viewport override so well-behaved
+  // keyboards keep their exact pre-existing behaviour (#8778).
+  private _iosKeyboardFrameUnreliable = false;
 
   private _isCustomWindowTitleBarEnabled(): boolean {
     // The main process (main-window.ts) force-disables the custom title bar on
@@ -134,17 +256,47 @@ export class GlobalThemeService {
 
   isDarkTheme = toSignal(this._isDarkThemeObs$, { initialValue: false });
 
-  private _backgroundImgObs$: Observable<string | null | undefined> = combineLatest([
-    this._workContextService.currentTheme$,
-    this._isDarkThemeObs$,
-  ]).pipe(
-    map(([theme, isDarkMode]) =>
-      isDarkMode ? theme.backgroundImageDark : theme.backgroundImageLight,
-    ),
-    distinctUntilChanged(),
+  // Emits the current URL after each completed navigation, starting with the
+  // current URL so the stream is immediately available before any navigation.
+  private _currentUrl$: Observable<string> = this._router.events.pipe(
+    filter((e) => e instanceof NavigationEnd),
+    map((e) => (e as NavigationEnd).urlAfterRedirects),
+    startWith(this._router.url),
   );
 
-  backgroundImg = toSignal(this._backgroundImgObs$);
+  private _resolvedBackground$: Observable<ResolvedBackground> = combineLatest([
+    this._workContextService.currentTheme$,
+    this._isDarkThemeObs$,
+    this._currentUrl$,
+    this._globalConfigService.misc$,
+  ]).pipe(
+    map(([theme, isDarkMode, url, misc]) =>
+      resolveBackground(theme, misc, isDarkMode, url),
+    ),
+    distinctUntilChanged(
+      (a, b) =>
+        a.imageUrl === b.imageUrl &&
+        a.overlayOpacity === b.overlayOpacity &&
+        a.blur === b.blur,
+    ),
+  );
+
+  private _resolvedBackground = toSignal(this._resolvedBackground$, {
+    initialValue: {
+      imageUrl: null,
+      overlayOpacity: DEFAULT_BACKGROUND_OVERLAY_OPACITY * 0.01,
+      blur: 0,
+    } satisfies ResolvedBackground,
+  });
+
+  /** The resolved background image URL for the current route (null if none). */
+  readonly backgroundImg = computed(() => this._resolvedBackground().imageUrl);
+
+  /** Final CSS overlay opacity for the resolved background image. */
+  readonly bgOverlayOpacity = computed(() => this._resolvedBackground().overlayOpacity);
+
+  /** Blur radius (px) for the resolved background image. */
+  readonly bgImageBlur = computed(() => this._resolvedBackground().blur);
 
   init(): void {
     if (this._hasInitialized) {
@@ -156,6 +308,7 @@ export class GlobalThemeService {
       // This is here to make web page reloads on non-work-context pages at least usable
       this._setBackgroundTint(true);
       this._initIcons();
+      this._initRequiredThemeMode();
       this._initHandlersForInitialBodyClasses();
       this._initThemeWatchers();
 
@@ -174,6 +327,20 @@ export class GlobalThemeService {
     });
     // this._materialCssVarsService.setDarkTheme(true);
     // this._materialCssVarsService.setDarkTheme(false);
+  }
+
+  private _initRequiredThemeMode(): void {
+    const enforceActiveThemeMode = (): void => {
+      const requiredMode = getRequiredThemeMode(this._customThemeService.activeRef());
+      if (requiredMode && this.darkMode() !== requiredMode) {
+        this.darkMode.set(requiredMode);
+      }
+    };
+
+    // Effects run during change detection; enforce once synchronously so the
+    // cold-start stylesheet never waits a frame for its required body class.
+    enforceActiveThemeMode();
+    effect(enforceActiveThemeMode);
   }
 
   private _setColorTheme(theme: WorkContextThemeCfg): void {
@@ -270,12 +437,21 @@ export class GlobalThemeService {
     return this._registeredPluginIcons.has(iconName);
   }
 
+  /**
+   * `svgContent` comes from a plugin, so it is untrusted. `MatIconRegistry` parses the
+   * literal with `div.innerHTML`, which makes this the trust boundary for that sink.
+   */
   registerSvgIconFromContent(iconName: string, svgContent: string): void {
     // Plugin icon is already registered, skip
     if (this._registeredPluginIcons.has(iconName)) return;
+    const safeSvgContent = sanitizeSvgIconContent(svgContent);
+    if (!safeSvgContent) {
+      PluginLog.warn(`Skipping unsafe or invalid SVG icon: ${iconName}`);
+      return;
+    }
     this._matIconRegistry.addSvgIconLiteral(
       iconName,
-      this._domSanitizer.bypassSecurityTrustHtml(svgContent),
+      this._domSanitizer.bypassSecurityTrustHtml(safeSvgContent),
     );
     this._registeredPluginIcons.add(iconName);
   }
@@ -519,12 +695,24 @@ export class GlobalThemeService {
       if (!this.document.body.classList.contains(BodyClass.isKeyboardVisible)) {
         this._iosViewportHeightBeforeKeyboard = window.innerHeight;
       }
-      this._iosKeyboardHeight = info.keyboardHeight;
+      // Some third-party keyboards (e.g. Sogou) report a bogus near-full-screen
+      // keyboard frame here; clamp it so it can't fling the fixed add-task bar
+      // to the top of the screen (#8778).
+      const referenceHeight = this._iosViewportHeightBeforeKeyboard || window.innerHeight;
+      const keyboardHeight = sanitizeIosKeyboardHeight(
+        info.keyboardHeight,
+        referenceHeight,
+      );
+      // Only a frame the clamp had to correct opts into the measured-viewport
+      // override in _updateIOSKeyboardViewportVars; well-behaved keyboards keep
+      // the exact pre-existing behaviour, so this cannot regress them.
+      this._iosKeyboardFrameUnreliable = keyboardHeight !== info.keyboardHeight;
+      this._iosKeyboardHeight = keyboardHeight;
       this.document.body.classList.add(BodyClass.isKeyboardVisible);
       // Set CSS variable for keyboard height to adjust layout
       this.document.documentElement.style.setProperty(
         CSS_VAR_KEYBOARD_HEIGHT,
-        `${info.keyboardHeight}px`,
+        `${keyboardHeight}px`,
       );
       this._updateIOSKeyboardViewportVars();
     }).then((handle) => this._keyboardListenerHandles.push(handle));
@@ -539,6 +727,7 @@ export class GlobalThemeService {
       Log.log('iOS keyboard will hide');
       this._iosKeyboardHeight = 0;
       this._iosViewportHeightBeforeKeyboard = 0;
+      this._iosKeyboardFrameUnreliable = false;
       this.document.body.classList.remove(BodyClass.isKeyboardVisible);
       this.document.documentElement.style.setProperty(CSS_VAR_KEYBOARD_HEIGHT, '0px');
       this.document.documentElement.style.setProperty(
@@ -602,6 +791,27 @@ export class GlobalThemeService {
       CSS_VAR_KEYBOARD_OVERLAY_OFFSET,
       `${isKeyboardVisible && !isVisualViewportAlreadyResized ? this._iosKeyboardHeight : 0}px`,
     );
+
+    // For a keyboard whose reported frame was implausible, once the viewport has
+    // actually shrunk its measured obscured area (`baseHeight -
+    // visualViewportHeight`) is a far more reliable keyboard height than the
+    // bogus plugin frame (#8778), and is correct under both `resize: 'native'`
+    // and non-resizing modes. Correct `--keyboard-height` to the measurement
+    // (still clamped as a safety net). Well-behaved keyboards skip this entirely
+    // and keep the plugin value set in keyboardWillShow — no behaviour change.
+    if (
+      this._iosKeyboardFrameUnreliable &&
+      this._isVisualViewportResizedForKeyboard(
+        isKeyboardVisible,
+        baseHeight,
+        visualViewportHeight,
+      )
+    ) {
+      root.style.setProperty(
+        CSS_VAR_KEYBOARD_HEIGHT,
+        `${sanitizeIosKeyboardHeight(baseHeight - visualViewportHeight, baseHeight)}px`,
+      );
+    }
     this._notifyIOSViewportChange();
   }
 
@@ -780,54 +990,23 @@ export class GlobalThemeService {
       SafeArea.getSafeAreaInsets().then(({ insets }) => applyInsets(insets));
       SafeArea.addListener('safeAreaChanged', ({ insets }) => applyInsets(insets));
     }
-    this._patchCdkViewportForSafeArea();
-  }
-
-  /**
-   * Monkey-patch CDK's viewport rect calculation to include native mobile insets.
-   * This keeps connected overlays (menus, selects, autocomplete panels) above
-   * the safe areas and the iOS keyboard when the WebView does not shrink.
-   */
-  private _patchCdkViewportForSafeArea(): void {
-    const proto = FlexibleConnectedPositionStrategy.prototype as any;
-    const original = proto._getNarrowedViewportRect;
-    const doc = this.document;
-    proto._getNarrowedViewportRect = function (): {
-      top: number;
-      left: number;
-      right: number;
-      bottom: number;
-      width: number;
-      height: number;
-    } {
-      const rect = original.call(this);
-      const style = getComputedStyle(doc.documentElement);
-      const safeTop = parseInt(style.getPropertyValue(CSS_VAR_SAFE_AREA_TOP), 10) || 0;
-      const safeBottom =
-        parseInt(style.getPropertyValue(CSS_VAR_SAFE_AREA_BOTTOM), 10) || 0;
-      const keyboardOverlayOffset =
-        doc.body.classList.contains(BodyClass.isIOS) &&
-        doc.body.classList.contains(BodyClass.isKeyboardVisible)
-          ? parseInt(style.getPropertyValue(CSS_VAR_KEYBOARD_OVERLAY_OFFSET), 10) || 0
-          : 0;
-      const bottomInset = safeBottom + keyboardOverlayOffset;
-      return {
-        ...rect,
-        top: rect.top + safeTop,
-        bottom: rect.bottom - bottomInset,
-        height: rect.height - safeTop - bottomInset,
-      };
-    };
+    patchCdkViewportForSafeArea(this.document);
   }
 
   private _initMobileStatusBar(): void {
     effect(() => {
       const isDark = this.isDarkTheme();
+      // Re-read computed tokens only after the loader has atomically swapped
+      // the stylesheet. Theme changes do not necessarily change dark mode.
+      this._customThemeService.appliedThemeVersion();
       StatusBar.setStyle({ style: isDark ? Style.Dark : Style.Light }).catch((err) => {
         Log.warn('Failed to set status bar style', err);
       });
       if (this._platformService.isAndroid()) {
-        const bgColor = isDark ? '#131314' : '#f8f8f7';
+        const bgColor = resolveSystemSurfaceColor(
+          getComputedStyle(this.document.body).getPropertyValue(CSS_VAR_SYSTEM_SURFACE),
+          isDark,
+        );
         // The @capawesome edge-to-edge plugin (which painted opaque bar overlays
         // via EdgeToEdge.set{Status,Navigation}BarColor) was removed in favour of
         // Capacitor's built-in SystemBars. SystemBars has NO bar-color API — the

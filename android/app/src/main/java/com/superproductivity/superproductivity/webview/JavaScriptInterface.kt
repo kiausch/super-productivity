@@ -15,6 +15,7 @@ import com.superproductivity.superproductivity.App
 import com.superproductivity.superproductivity.BuildConfig
 import com.superproductivity.superproductivity.FullscreenActivity.Companion.WINDOW_INTERFACE_PROPERTY
 import com.superproductivity.superproductivity.app.LaunchDecider
+import com.superproductivity.superproductivity.review.InAppReview
 import com.superproductivity.superproductivity.service.BackgroundSyncCredentialStore
 import com.superproductivity.superproductivity.service.FocusModeForegroundService
 import com.superproductivity.superproductivity.service.ForegroundServiceFailure
@@ -25,6 +26,8 @@ import com.superproductivity.superproductivity.widget.ReminderDoneQueue
 import com.superproductivity.superproductivity.widget.ReminderSnoozeQueue
 import com.superproductivity.superproductivity.widget.ReminderTapQueue
 import com.superproductivity.superproductivity.widget.ShareIntentQueue
+import com.superproductivity.superproductivity.widget.TaskListWidgetProvider
+import com.superproductivity.superproductivity.widget.WidgetDoneQueue
 import com.superproductivity.superproductivity.widget.WidgetTaskQueue
 import org.json.JSONObject
 
@@ -80,6 +83,26 @@ class JavaScriptInterface(
         val launchDecider = LaunchDecider(activity)
         val launchMode = launchDecider.getLaunchMode()
         return "${versionName}_L$launchMode"
+    }
+
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getTextZoom(): Int {
+        // Chromium initializes WebView text zoom from this system font scale.
+        // Reading WebSettings directly here would cross WebView's UI-thread boundary.
+        return (100 * activity.resources.configuration.fontScale).toInt()
+    }
+
+    // Launch the Play In-App Review flow (play flavor). Delegates to a
+    // flavor-specific InAppReview: the real Play Core implementation in src/play,
+    // and a no-op stub in src/fdroid so the proprietary library stays out of the
+    // F-Droid build. Play controls whether/when the card actually shows.
+    @Suppress("unused")
+    @JavascriptInterface
+    fun requestReview() {
+        activity.runOnUiThread {
+            InAppReview.request(activity)
+        }
     }
 
     @Suppress("unused")
@@ -360,6 +383,26 @@ class JavaScriptInterface(
     }
 
     /**
+     * Get pending done-state changes from the home screen widget and clear the
+     * queue. Returns a JSON object string `{taskId: targetIsDone}` or null if empty.
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun getWidgetDoneQueue(): String? {
+        return WidgetDoneQueue.getAndClear(activity)
+    }
+
+    /**
+     * Re-render the home screen widget from the current `widget_data` KeyValStore
+     * snapshot. Called by Angular after each snapshot push.
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun updateWidget() {
+        TaskListWidgetProvider.refreshAll(activity)
+    }
+
+    /**
      * Pull-based retrieval of pending share data persisted in SharedPreferences.
      * Clears both SharedPreferences and in-memory pendingShareIntent to prevent duplicates.
      * @return JSON string of share data, or null if none pending
@@ -454,6 +497,21 @@ class JavaScriptInterface(
         safeCall("Failed to clear SuperSync credentials") {
             BackgroundSyncCredentialStore.clear(activity)
             SyncReminderScheduler.cancel(activity)
+        }
+    }
+
+    /**
+     * Mirrors the SuperSync E2EE password so background reminder sync can
+     * decrypt op payloads (encrypted end-to-end since #8670). Separate method
+     * from [setSuperSyncCredentials] so an old JS bundle paired with a new APK
+     * (and vice versa) keeps working. Empty string clears the password.
+     * NEVER log the password.
+     */
+    @Suppress("unused")
+    @JavascriptInterface
+    fun setSuperSyncEncryptionPassword(password: String) {
+        safeCall("Failed to set SuperSync encryption password") {
+            BackgroundSyncCredentialStore.setEncryptionPassword(activity, password)
         }
     }
 

@@ -12,6 +12,11 @@ export enum DB {
 export enum LS {
   APP_START_COUNT = 'APP_START_COUNT',
   APP_START_COUNT_LAST_START_DAY = 'APP_START_COUNT_LAST_START_DAY',
+  // Epoch ms first observed by SyncSafetyBannerService (seeded once, lazily, on
+  // its first run). Used only to tell "used for a while" by wall-clock time for
+  // the sync-setup nudge. NOT a true install date: for installs that predate
+  // this feature it is seeded at upgrade time, so don't reuse it as one.
+  SYNC_SAFETY_FIRST_SEEN = 'SUP_SYNC_SAFETY_FIRST_SEEN',
   RATE_DIALOG_STATE = 'SUP_RATE_DIALOG_STATE',
   // Set on an unhandled error or any detected data damage; read by the rating
   // prompt to hold off for a cooldown after a bad experience. Time only.
@@ -32,6 +37,21 @@ export enum LS {
   IS_TAG_LIST_EXPANDED = 'SUP_IS_TAG_LIST_EXPANDED',
 
   LAST_NOTE_BANNER_DAY = 'SUP_LAST_NOTE_BANNER_DAY',
+
+  // Set once the user acts on or dismisses the "set up sync to keep your data
+  // safe" startup banner, so the nudge is shown at most once ever.
+  SYNC_SAFETY_NUDGE_DISMISSED = 'SUP_SYNC_SAFETY_NUDGE_DISMISSED',
+
+  // Release tag the user already acted on in the desktop "update available"
+  // banner, so each new version is announced at most once. Device-local on
+  // purpose: other devices run other builds.
+  UPDATE_CHECK_DISMISSED_VERSION = 'SUP_UPDATE_CHECK_DISMISSED_VERSION',
+
+  // Epoch ms until which the "encrypt your SuperSync account" migration banner
+  // stays hidden. Set when the user picks "Later" (or opens the flow), so — unlike
+  // a permanent dismiss — an unencrypted E2EE-intended account is re-nudged calmly
+  // rather than nagged every sync or forgotten forever. Device-local, no telemetry.
+  SUPER_SYNC_ENCRYPTION_MIGRATION_SNOOZE_UNTIL = 'SUP_SUPER_SYNC_ENCRYPTION_MIGRATION_SNOOZE_UNTIL',
 
   SELECTED_TIME_VIEW = 'SELECTED_TIME_VIEW',
   SCHEDULE_WEEK_ROW_HEIGHT = 'SUP_SCHEDULE_WEEK_ROW_HEIGHT',
@@ -89,6 +109,10 @@ export enum LS {
   // Daily summary
   DAILY_SUMMARY_WORKLOG_VIEW_MODE = 'SUP_DAILY_SUMMARY_WORKLOG_VIEW_MODE',
 }
+
+// Prefix for device-local, never-synced note drafts (see LocalDraftService).
+// Full key: `${LS_LOCAL_DRAFT_PREFIX}${profileId}:${entityType}:${entityId}`.
+export const LS_LOCAL_DRAFT_PREFIX = 'SUP_LOCAL_DRAFT_';
 
 // SESSION STORAGE
 export enum SS {

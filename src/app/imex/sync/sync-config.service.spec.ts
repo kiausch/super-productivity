@@ -87,6 +87,7 @@ describe('SyncConfigService', () => {
         syncProvider: SyncProviderId.WebDAV,
         syncInterval: 300000,
         isEncryptionEnabled: true,
+        isUseSplitSyncFiles: true,
         encryptKey: 'secret-key',
         webDav: {
           baseUrl: 'https://example.com',
@@ -104,6 +105,7 @@ describe('SyncConfigService', () => {
       expect(globalConfigService.updateSection).toHaveBeenCalledWith('sync', {
         isEnabled: true,
         isEncryptionEnabled: true,
+        isUseSplitSyncFiles: true,
         syncProvider: SyncProviderId.WebDAV,
         syncInterval: 300000,
       });
@@ -151,6 +153,8 @@ describe('SyncConfigService', () => {
           password: 'oldpass', // Preserved from old config
           syncFolderPath: '/old', // Preserved from old config
           encryptKey: 'test-key', // New value from settings
+          // GHSA-9544: durable intent backfilled from the key present at save.
+          isEncryptionEnabled: true,
         },
       );
     });
@@ -180,6 +184,8 @@ describe('SyncConfigService', () => {
         SyncProviderId.LocalFile,
         {
           encryptKey: 'test-key',
+          // GHSA-9544: durable intent backfilled from the key present at save.
+          isEncryptionEnabled: true,
         },
       );
     });
@@ -338,6 +344,8 @@ describe('SyncConfigService', () => {
           accessToken: 'existing-access-token', // Preserved OAuth tokens
           refreshToken: 'existing-refresh-token', // Preserved OAuth tokens
           encryptKey: 'dropbox-key', // Updated from settings
+          // GHSA-9544: durable intent backfilled from the key present at save.
+          isEncryptionEnabled: true,
         },
       );
     });
@@ -809,6 +817,8 @@ describe('SyncConfigService', () => {
           password: 'newpass',
           syncFolderPath: '/new',
           encryptKey: 'new-key',
+          // GHSA-9544: durable intent backfilled from the key present at save.
+          isEncryptionEnabled: true,
         },
       );
     });
@@ -1237,8 +1247,9 @@ describe('SyncConfigService', () => {
       );
     });
 
-    it('should not add isEncryptionEnabled for non-SuperSync providers', async () => {
-      // Setup WebDAV provider
+    it('should enable encryption when updating the password for a file-based provider', async () => {
+      // Setup WebDAV provider with encryption disabled before it encounters an
+      // encrypted remote and prompts for the password.
       const mockProvider = {
         id: SyncProviderId.WebDAV,
         privateCfg: {
@@ -1249,6 +1260,7 @@ describe('SyncConfigService', () => {
               password: 'test',
               syncFolderPath: '/',
               encryptKey: 'oldpass',
+              isEncryptionEnabled: false,
             }),
           ),
         },
@@ -1261,12 +1273,16 @@ describe('SyncConfigService', () => {
       // Update password
       await service.updateEncryptionPassword('newpass', SyncProviderId.WebDAV);
 
-      // Verify only encryptKey is updated (no isEncryptionEnabled field)
-      const callArgs = (
-        providerManager.setProviderConfig as jasmine.Spy
-      ).calls.mostRecent().args[1];
-      expect(callArgs.encryptKey).toBe('newpass');
-      expect(callArgs.isEncryptionEnabled).toBeUndefined();
+      // The password proves that this client intends to participate in the
+      // encrypted remote. Leaving the explicit false flag in place would make
+      // the next WebDAV upload silently downgrade the remote to plaintext.
+      expect(providerManager.setProviderConfig).toHaveBeenCalledWith(
+        SyncProviderId.WebDAV,
+        jasmine.objectContaining({
+          encryptKey: 'newpass',
+          isEncryptionEnabled: true,
+        }),
+      );
     });
 
     it('should not dispatch persistent global config action when updating password', async () => {

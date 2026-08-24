@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { uuidv7 } from 'uuidv7';
 import { Prisma } from '@prisma/client';
-import { prefetchLatestEntityOpsForBatch } from '../src/sync/conflict';
+import {
+  getEntityConflictKey,
+  prefetchLatestEntityOpsForBatch,
+} from '../src/sync/conflict';
+import { CONFLICT_DETECTION_ENTITY_BATCH_SIZE } from '../src/sync/sync.types';
 import { testState, resetTestState } from './sync.service.test-state';
+import type { OperationWhereAlternative } from './sync.service.test-state';
 
 // Mock the database module with Prisma mocks
 vi.mock('../src/db', async () => {
@@ -10,6 +15,13 @@ vi.mock('../src/db', async () => {
   const {
     applyOperationSelect,
     hasOperationUniqueConflict,
+    isEntityArrayBranchQuery,
+    entityArrayBranchRows,
+    mockOperationGroupByMaxSeq,
+    mockOperationFindFirstCausalRepair,
+    mockOperationFindFirstFreshBelowBoundary,
+    mockUserSyncStateFindMany,
+    matchesOperationAlternative,
     testState: state,
   } = await import('./sync.service.test-state');
   const { Prisma: PrismaModule } = await import('@prisma/client');
@@ -58,11 +70,26 @@ vi.mock('../src/db', async () => {
         return { count };
       }),
       findFirst: vi.fn().mockImplementation(async (args: any) => {
+        // Shape of the full-state author query — counted so tests can pin that it
+        // stays one-per-upload rather than one-per-op. Selecting clientId ALONE is
+        // what separates it from the entity-conflict lookup, which also filters on
+        // OR + orders by serverSeq but selects the whole row.
+        if (
+          Array.isArray(args.where?.OR) &&
+          args.where?.entityType === undefined &&
+          args.orderBy?.serverSeq === 'desc' &&
+          args.select?.clientId === true &&
+          Object.keys(args.select).length === 1
+        ) {
+          state.fullStateAuthorLookupCount++;
+        }
         if (args.where?.id) {
           return (
             applyOperationSelect(state.operations.get(args.where.id), args.select) || null
           );
         }
+        const causalRepair = mockOperationFindFirstCausalRepair(state.operations, args);
+        if (causalRepair !== undefined) return causalRepair;
         if (args.where?.opType?.in) {
           const ops = Array.from(state.operations.values())
             .filter((op: any) => args.where.userId === op.userId)
@@ -79,6 +106,35 @@ vi.mock('../src/db', async () => {
             }
           }
         }
+        if (
+          Array.isArray(args.where?.OR) &&
+          args.where.OR.some(
+            (alternative: OperationWhereAlternative) => alternative.opType !== undefined,
+          )
+        ) {
+          const ops = Array.from(state.operations.values())
+            .filter(
+              (op: any) =>
+                args.where.userId === op.userId &&
+                (args.where.serverSeq?.lte === undefined ||
+                  op.serverSeq <= args.where.serverSeq.lte) &&
+                (typeof args.where.serverSeq !== 'number' ||
+                  op.serverSeq === args.where.serverSeq) &&
+                args.where.OR.some((alternative: OperationWhereAlternative) =>
+                  matchesOperationAlternative(
+                    op.opType,
+                    op.repairBaseServerSeq,
+                    alternative,
+                  ),
+                ),
+            )
+            .sort((a: any, b: any) => b.serverSeq - a.serverSeq);
+          return applyOperationSelect(ops[0], args.select) || null;
+        }
+        // Scalar branch of the single-entity conflict lookup. The entity_ids half is
+        // a separate $queryRaw call; the two were one OR + ORDER BY ... LIMIT 1
+        // until that degenerated into a full history scan in production (see the
+        // PERF note in conflict.ts detectConflictForEntity).
         if (args.where?.entityId && args.where?.entityType) {
           const ops = Array.from(state.operations.values())
             .filter(
@@ -111,9 +167,25 @@ vi.mock('../src/db', async () => {
               op.serverSeq > args.where.serverSeq.lte
             )
               return false;
+            if (
+              args.where?.serverSeq?.lt !== undefined &&
+              op.serverSeq >= args.where.serverSeq.lt
+            )
+              return false;
             if (args.where?.clientId?.not && op.clientId === args.where.clientId.not)
               return false;
             if (args.where?.opType?.in && !args.where.opType.in.includes(op.opType))
+              return false;
+            if (
+              Array.isArray(args.where?.OR) &&
+              !args.where.OR.some((alternative: OperationWhereAlternative) =>
+                matchesOperationAlternative(
+                  op.opType,
+                  op.repairBaseServerSeq,
+                  alternative,
+                ),
+              )
+            )
               return false;
             return true;
           })
@@ -140,6 +212,8 @@ vi.mock('../src/db', async () => {
         for (const [id, op] of state.operations) {
           let shouldDelete = true;
           if (args.where?.userId !== undefined && op.userId !== args.where.userId)
+            shouldDelete = false;
+          if (args.where?.id?.in && !args.where.id.in.includes(op.id))
             shouldDelete = false;
           if (
             args.where?.receivedAt?.lt !== undefined &&
@@ -170,11 +244,30 @@ vi.mock('../src/db', async () => {
           )
             matches = false;
           if (args.where?.isPayloadEncrypted && !op.isPayloadEncrypted) matches = false;
+          if (typeof args.where?.opType === 'string' && op.opType !== args.where.opType)
+            matches = false;
+          if (args.where?.repairBaseServerSeq === null && op.repairBaseServerSeq != null)
+            matches = false;
+          if (
+            args.where?.repairBaseServerSeq?.not === null &&
+            op.repairBaseServerSeq == null
+          )
+            matches = false;
           if (matches) count++;
         }
         return count;
       }),
       findUnique: vi.fn().mockImplementation(async (args: any) => {
+        // (user_id, server_seq) compound unique — fetches the conflict lookup's
+        // array-branch winner once its max serverSeq is known.
+        const compound = args.where?.userId_serverSeq;
+        if (compound) {
+          const match = Array.from(state.operations.values()).find(
+            (op: any) =>
+              op.userId === compound.userId && op.serverSeq === compound.serverSeq,
+          );
+          return applyOperationSelect(match, args.select) || null;
+        }
         if (args.where?.id) {
           return (
             applyOperationSelect(state.operations.get(args.where.id), args.select) || null
@@ -220,18 +313,11 @@ vi.mock('../src/db', async () => {
         }
         return null;
       }),
-      findMany: vi.fn().mockImplementation(async (args: any) => {
-        return Array.from(state.userSyncStates.values()).filter((s: any) => {
-          if (
-            args?.where?.lastSnapshotSeq?.not !== undefined &&
-            s.lastSnapshotSeq == null
-          )
-            return false;
-          if (args?.where?.snapshotAt?.not !== undefined && s.snapshotAt == null)
-            return false;
-          return true;
-        });
-      }),
+      findMany: vi
+        .fn()
+        .mockImplementation(async (args: any) =>
+          mockUserSyncStateFindMany(state.userSyncStates, args),
+        ),
       deleteMany: vi.fn().mockImplementation(async (args: any) => {
         let deleted = 0;
         for (const [key, syncState] of state.userSyncStates) {
@@ -313,6 +399,22 @@ vi.mock('../src/db', async () => {
     // returning their existing default shape.
     $queryRaw: vi.fn().mockImplementation(async (strings: any, ...params: any[]) => {
       const sql = Array.isArray(strings) ? strings.join('') : String(strings);
+      // Array branch of the single-entity conflict lookup: MAX(server_seq) over
+      // `entity_ids @> ARRAY[id]`, scoped to ONE entity — not a user-wide max
+      // (see conflict.ts detectConflictForEntity).
+      if (isEntityArrayBranchQuery(strings)) {
+        return entityArrayBranchRows(state.operations, params);
+      }
+      if (sql.includes('FROM user_sync_state') && sql.includes('FOR UPDATE')) {
+        const [txUserId] = params as [number];
+        const syncState = state.userSyncStates.get(txUserId);
+        return [
+          {
+            lastSeq: syncState?.lastSeq ?? 0,
+            latestStateReplacementSeq: syncState?.latestStateReplacementSeq ?? null,
+          },
+        ];
+      }
       if (sql.includes('INSERT INTO user_sync_state')) {
         const [txUserId, delta] = params as [number, number];
         const existing = state.userSyncStates.get(txUserId);
@@ -324,18 +426,25 @@ vi.mock('../src/db', async () => {
         state.serverSeqCounter = Math.max(state.serverSeqCounter, lastSeq);
         return [{ lastSeq }];
       }
-      if (sql.includes('JOIN (VALUES')) {
-        // Params are [touchedRows (VALUES join), userId, idArray, idArray]: userId
-        // is the only number; the VALUES join is the first Sql fragment, whose
-        // .values hold the flattened (entity_type, entity_id) touched pairs. The
-        // idArray prefilter params (#8334) are not needed by the mock. (Previously
-        // userId was the last param and the join the only fragment.)
+      if (sql.includes('touched(entity_type, entity_id)')) {
+        // Params are [touchedRows (the VALUES CTE), userId, arrayBranchCte, userId]:
+        // userId is the only number, and touchedRows is the only Sql fragment with a
+        // NON-EMPTY .values (the shared array-branch CTE binds nothing), whose values
+        // hold the flattened (entity_type, entity_id) pairs. Matched on the CTE name
+        // rather than on `JOIN (VALUES` because #9503 lifted the VALUES list into a CTE
+        // and dropped the separate idArray params. Deliberately position-independent —
+        // three mocks broke on positional params during that change.
+        //
+        // This mock matches stored ops by scalar entityId only and ignores entityIds,
+        // so it does not model the array branch: a future batchUpload test whose prior
+        // op is multi-entity would get a false "no conflict" here.
         const txUserId = params.find((p: unknown) => typeof p === 'number') as number;
         const valuesParam = params.find(
           (p: unknown) =>
             !!p &&
             typeof p === 'object' &&
-            Array.isArray((p as { values?: unknown[] }).values),
+            Array.isArray((p as { values?: unknown[] }).values) &&
+            (p as { values: unknown[] }).values.length > 0,
         ) as { values: unknown[] } | undefined;
         const touchedParams = valuesParam?.values ?? [];
         const touchedPairs = new Set<string>();
@@ -359,6 +468,7 @@ vi.mock('../src/db', async () => {
           entityId: op.entityId,
           clientId: op.clientId,
           vectorClock: op.vectorClock,
+          serverSeq: op.serverSeq,
         }));
       }
       if (sql.includes('jsonb_each_text(vector_clock)')) {
@@ -382,17 +492,50 @@ vi.mock('../src/db', async () => {
           max_counter: BigInt(max_counter),
         }));
       }
-      return [{ total: BigInt(0) }];
+      // Unrecognised raw queries must THROW, never return a plausible-looking row.
+      // conflict.ts reads an unknown shape via `arrayBranchRows[0]?.maxSeq ?? null`
+      // as "no array-branch match", so a tolerant default silently deletes the
+      // branch under test instead of failing.
+      throw new Error(`Unmocked raw query in tx: ${sql}`);
     }),
   });
 
   return {
     prisma: {
-      $transaction: vi
-        .fn()
-        .mockImplementation(async (callback: any) => callback(createTxMock())),
+      $transaction: vi.fn().mockImplementation(async (callback: any) => {
+        const transactionStart = {
+          operations: new Map(
+            Array.from(state.operations, ([id, op]) => [id, { ...op }]),
+          ),
+          syncDevices: new Map(
+            Array.from(state.syncDevices, ([id, device]) => [id, { ...device }]),
+          ),
+          userSyncStates: new Map(
+            Array.from(state.userSyncStates, ([id, syncState]) => [id, { ...syncState }]),
+          ),
+          users: new Map(Array.from(state.users, ([id, user]) => [id, { ...user }])),
+          serverSeqCounter: state.serverSeqCounter,
+        };
+        try {
+          return await callback(createTxMock());
+        } catch (error) {
+          state.operations = transactionStart.operations;
+          state.syncDevices = transactionStart.syncDevices;
+          state.userSyncStates = transactionStart.userSyncStates;
+          state.users = transactionStart.users;
+          state.serverSeqCounter = transactionStart.serverSeqCounter;
+          throw error;
+        }
+      }),
       operation: {
         findFirst: vi.fn().mockImplementation(async (args: any) => {
+          const freshBelowBoundary = mockOperationFindFirstFreshBelowBoundary(
+            state.operations,
+            args,
+          );
+          if (freshBelowBoundary !== undefined) return freshBelowBoundary;
+          const causalRepair = mockOperationFindFirstCausalRepair(state.operations, args);
+          if (causalRepair !== undefined) return causalRepair;
           if (args.where?.opType?.in) {
             const ops = Array.from(state.operations.values())
               .filter((op: any) => args.where.userId === op.userId)
@@ -406,6 +549,30 @@ vi.mock('../src/db', async () => {
                 }
               }
             }
+          }
+          if (
+            Array.isArray(args.where?.OR) &&
+            args.where.OR.some(
+              (alternative: OperationWhereAlternative) =>
+                alternative.opType !== undefined,
+            )
+          ) {
+            const ops = Array.from(state.operations.values())
+              .filter(
+                (op: any) =>
+                  args.where.userId === op.userId &&
+                  (args.where.serverSeq?.lte === undefined ||
+                    op.serverSeq <= args.where.serverSeq.lte) &&
+                  args.where.OR.some((alternative: OperationWhereAlternative) =>
+                    matchesOperationAlternative(
+                      op.opType,
+                      op.repairBaseServerSeq,
+                      alternative,
+                    ),
+                  ),
+              )
+              .sort((a: any, b: any) => b.serverSeq - a.serverSeq);
+            return applyOperationSelect(ops[0], args.select) || null;
           }
           return null;
         }),
@@ -427,6 +594,11 @@ vi.mock('../src/db', async () => {
               )
                 return false;
               if (
+                args.where?.serverSeq?.lt !== undefined &&
+                op.serverSeq >= args.where.serverSeq.lt
+              )
+                return false;
+              if (
                 args.where?.receivedAt?.lt !== undefined &&
                 op.receivedAt >= args.where.receivedAt.lt
               )
@@ -434,6 +606,17 @@ vi.mock('../src/db', async () => {
               if (args.where?.clientId?.not && op.clientId === args.where.clientId.not)
                 return false;
               if (args.where?.opType?.in && !args.where.opType.in.includes(op.opType))
+                return false;
+              if (
+                Array.isArray(args.where?.OR) &&
+                !args.where.OR.some((alternative: OperationWhereAlternative) =>
+                  matchesOperationAlternative(
+                    op.opType,
+                    op.repairBaseServerSeq,
+                    alternative,
+                  ),
+                )
+              )
                 return false;
               return true;
             })
@@ -456,6 +639,11 @@ vi.mock('../src/db', async () => {
             _max: { serverSeq: Math.max(...seqs) },
           };
         }),
+        groupBy: vi
+          .fn()
+          .mockImplementation(async (args: any) =>
+            mockOperationGroupByMaxSeq(state.operations, args),
+          ),
         count: vi.fn().mockImplementation(async (args: any) => {
           let count = 0;
           for (const op of state.operations.values()) {
@@ -473,6 +661,18 @@ vi.mock('../src/db', async () => {
             )
               matches = false;
             if (args.where?.isPayloadEncrypted && !op.isPayloadEncrypted) matches = false;
+            if (typeof args.where?.opType === 'string' && op.opType !== args.where.opType)
+              matches = false;
+            if (
+              args.where?.repairBaseServerSeq === null &&
+              op.repairBaseServerSeq != null
+            )
+              matches = false;
+            if (
+              args.where?.repairBaseServerSeq?.not === null &&
+              op.repairBaseServerSeq == null
+            )
+              matches = false;
             if (matches) count++;
           }
           return count;
@@ -516,18 +716,11 @@ vi.mock('../src/db', async () => {
           return result;
         }),
         update: vi.fn().mockResolvedValue({}),
-        findMany: vi.fn().mockImplementation(async (args: any) => {
-          return Array.from(state.userSyncStates.values()).filter((s: any) => {
-            if (
-              args?.where?.lastSnapshotSeq?.not !== undefined &&
-              s.lastSnapshotSeq == null
-            )
-              return false;
-            if (args?.where?.snapshotAt?.not !== undefined && s.snapshotAt == null)
-              return false;
-            return true;
-          });
-        }),
+        findMany: vi
+          .fn()
+          .mockImplementation(async (args: any) =>
+            mockUserSyncStateFindMany(state.userSyncStates, args),
+          ),
         updateMany: vi.fn().mockImplementation(async (args: any) => {
           let updated = 0;
           for (const [, syncState] of state.userSyncStates) {
@@ -605,6 +798,8 @@ import { DeviceService } from '../src/sync/services/device.service';
 import { OperationDownloadService } from '../src/sync/services/operation-download.service';
 import { Operation, DEFAULT_SYNC_CONFIG, SYNC_ERROR_CODES } from '../src/sync/sync.types';
 import { prisma } from '../src/db';
+import { Logger } from '../src/logger';
+import { CURRENT_SCHEMA_VERSION } from '@sp/shared-schema';
 
 describe('SyncService', () => {
   const userId = 1;
@@ -627,6 +822,19 @@ describe('SyncService', () => {
     schemaVersion: 1,
     ...overrides,
   });
+
+  const makeGlobalConfigOp = (overrides: Partial<Operation> = {}): Operation =>
+    makeOp({
+      actionType: '[GLOBAL_CONFIG] Update section',
+      opType: 'UPD',
+      entityType: 'GLOBAL_CONFIG',
+      entityId: 'misc',
+      payload: {
+        sectionKey: 'misc',
+        sectionCfg: { defaultProjectId: 'project-1' },
+      },
+      ...overrides,
+    });
 
   beforeEach(() => {
     // Reset all test data stores
@@ -653,7 +861,225 @@ describe('SyncService', () => {
     delete process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN;
   });
 
+  describe('filterValidOpsForQuota', () => {
+    it('excludes invalid schema and oversized payload siblings from quota sizing', () => {
+      const service = new SyncService({ maxPayloadSizeBytes: 100 });
+      const validOp = makeOp({
+        id: 'valid-op',
+        payload: { title: 'Fits quota' },
+      });
+      const invalidSchemaOp = makeOp({
+        id: 'invalid-schema-op',
+        schemaVersion: 101,
+      });
+      const oversizedInvalidOp = makeOp({
+        id: 'oversized-invalid-op',
+        payload: { data: 'x'.repeat(200) },
+      });
+
+      const result = service.filterValidOpsForQuota(
+        [validOp, invalidSchemaOp, oversizedInvalidOp],
+        clientId,
+      );
+
+      expect(result).toEqual([validOp]);
+    });
+
+    it('does not charge a later valid sibling when an invalid op reserved its ID', () => {
+      const service = new SyncService();
+      const invalidFirst = makeOp({
+        id: 'reserved-by-invalid-op',
+        entityType: 'INVALID_ENTITY_TYPE',
+      });
+      const laterLargeSibling = makeOp({
+        id: invalidFirst.id,
+        entityId: 'fresh-task',
+        payload: { data: 'x'.repeat(10_000) },
+      });
+
+      expect(
+        service.filterValidOpsForQuota([invalidFirst, laterLargeSibling], clientId),
+      ).toEqual([]);
+    });
+  });
+
   describe('uploadOps', () => {
+    it('rejects a cursor behind the latest state replacement but allows its boundary', async () => {
+      const service = new SyncService({ batchUpload: true });
+      const op = makeOp({ id: 'post-replacement-edit' });
+      const replacement = makeOp({
+        id: 'retained-state-replacement',
+        opType: 'SYNC_IMPORT',
+        entityType: 'ALL',
+        entityId: undefined,
+      });
+      testState.operations.set(replacement.id, {
+        ...replacement,
+        userId,
+        serverSeq: 3,
+        entityId: null,
+        entityIds: [],
+        payloadBytes: BigInt(1),
+        clientTimestamp: BigInt(replacement.timestamp),
+        receivedAt: BigInt(replacement.timestamp),
+        isPayloadEncrypted: false,
+        syncImportReason: null,
+        repairBaseServerSeq: null,
+      });
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 4,
+        latestStateReplacementSeq: null,
+      });
+
+      const staleResults = await service.uploadOps(
+        userId,
+        clientId,
+        [op],
+        undefined,
+        undefined,
+        undefined,
+        false,
+        2,
+      );
+
+      expect(staleResults).toEqual([
+        expect.objectContaining({
+          opId: op.id,
+          accepted: false,
+          errorCode: SYNC_ERROR_CODES.INTERNAL_ERROR,
+        }),
+      ]);
+      expect(testState.operations.has(op.id)).toBe(false);
+      expect(testState.userSyncStates.get(userId)?.lastSeq).toBe(4);
+      expect(testState.userSyncStates.get(userId)?.latestStateReplacementSeq).toBe(3);
+
+      const currentResults = await service.uploadOps(
+        userId,
+        clientId,
+        [op],
+        undefined,
+        undefined,
+        undefined,
+        false,
+        3,
+      );
+
+      expect(currentResults).toEqual([
+        expect.objectContaining({
+          opId: op.id,
+          accepted: true,
+          serverSeq: 5,
+        }),
+      ]);
+      expect(testState.operations.has(op.id)).toBe(true);
+    });
+
+    it('resolves the latest state replacement for cached upload checks', async () => {
+      const service = new SyncService();
+      const replacement = makeOp({
+        id: 'cached-check-state-replacement',
+        opType: 'BACKUP_IMPORT',
+        entityType: 'ALL',
+        entityId: undefined,
+      });
+      testState.operations.set(replacement.id, {
+        ...replacement,
+        userId,
+        serverSeq: 3,
+        entityId: null,
+        entityIds: [],
+        payloadBytes: BigInt(1),
+        clientTimestamp: BigInt(replacement.timestamp),
+        receivedAt: BigInt(replacement.timestamp),
+        isPayloadEncrypted: false,
+        syncImportReason: null,
+        repairBaseServerSeq: null,
+      });
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 4,
+        latestStateReplacementSeq: null,
+      });
+
+      await expect(service.getLatestStateReplacementSeq(userId)).resolves.toBe(3);
+      await expect(service.getLatestStateReplacementSeq(userId + 1)).resolves.toBeNull();
+    });
+
+    /**
+     * Both pruning paths (the daily old-ops sweep and quota recovery) can
+     * delete a SYNC_IMPORT out from under a later causal REPAIR. The resolved
+     * cursor is persisted, so an import-only lookup does not just answer one
+     * request wrong — it writes 0 down and disarms the guard for good.
+     */
+    const seedRepair = (serverSeq: number, repairBaseServerSeq: number | null): void => {
+      const repair = makeOp({
+        id: `retained-repair-${serverSeq}`,
+        opType: 'REPAIR',
+        entityType: 'ALL',
+        entityId: undefined,
+      });
+      testState.operations.set(repair.id, {
+        ...repair,
+        userId,
+        serverSeq,
+        entityId: null,
+        entityIds: [],
+        payloadBytes: BigInt(1),
+        clientTimestamp: BigInt(repair.timestamp),
+        receivedAt: BigInt(repair.timestamp),
+        isPayloadEncrypted: false,
+        syncImportReason: null,
+        repairBaseServerSeq,
+      });
+    };
+
+    it('falls back to the newest causal REPAIR when no import is retained', async () => {
+      const service = new SyncService();
+      seedRepair(3, 2);
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 4,
+        latestStateReplacementSeq: null,
+      });
+
+      await expect(service.getLatestStateReplacementSeq(userId)).resolves.toBe(3);
+    });
+
+    it('ignores a legacy REPAIR with no causal base', async () => {
+      // Legacy REPAIR rows carry no base cursor, so they are not proven to
+      // supersede their prefix and must stay invisible to the guard — the same
+      // exclusion CAUSAL_FULL_STATE_OPERATION_WHERE makes everywhere else.
+      const service = new SyncService();
+      seedRepair(3, null);
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 4,
+        latestStateReplacementSeq: null,
+      });
+
+      await expect(service.getLatestStateReplacementSeq(userId)).resolves.toBeNull();
+    });
+
+    it('persists a resolved no-replacement sentinel on the upload path', async () => {
+      const service = new SyncService({ batchUpload: true });
+      const op = makeOp({ id: 'first-upload-with-cursor' });
+
+      const result = await service.uploadOps(
+        userId,
+        clientId,
+        [op],
+        undefined,
+        undefined,
+        undefined,
+        false,
+        0,
+      );
+
+      expect(result[0].accepted).toBe(true);
+      expect(testState.userSyncStates.get(userId)?.latestStateReplacementSeq).toBe(0);
+    });
+
     it('should correctly upload operations', async () => {
       const service = getSyncService();
       const op: Operation = makeOp();
@@ -666,6 +1092,77 @@ describe('SyncService', () => {
 
       const latestSeq = await service.getLatestSeq(userId);
       expect(latestSeq).toBe(1);
+    });
+
+    it('preserves existing data when a clean-slate replacement fails validation', async () => {
+      const service = new SyncService({ maxPayloadSizeBytes: 500 });
+      const existingOp = makeOp({
+        id: 'existing-before-clean-slate',
+        payload: { title: 'Keep me' },
+      });
+      const invalidReplacement = makeOp({
+        id: 'invalid-clean-slate-replacement',
+        opType: 'SYNC_IMPORT',
+        entityType: 'ALL',
+        entityId: undefined,
+        payload: { data: 'x'.repeat(1_000) },
+      });
+
+      const initialResult = await service.uploadOps(userId, clientId, [existingOp]);
+      vi.mocked(prisma.$transaction).mockClear();
+      const replacementResult = await service.uploadOps(
+        userId,
+        clientId,
+        [invalidReplacement],
+        true,
+      );
+
+      expect(initialResult[0].accepted).toBe(true);
+      expect(replacementResult[0]).toEqual(
+        expect.objectContaining({
+          accepted: false,
+          errorCode: SYNC_ERROR_CODES.PAYLOAD_TOO_LARGE,
+        }),
+      );
+      expect(testState.operations.has(existingOp.id)).toBe(true);
+      expect(testState.operations.has(invalidReplacement.id)).toBe(false);
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('preserves existing data when any clean-slate operation is rejected', async () => {
+      const service = getSyncService();
+      const existingOp = makeOp({ id: 'existing-before-rejected-clean-slate' });
+      const replacement = makeOp({
+        id: 'duplicate-clean-slate-replacement',
+        opType: 'SYNC_IMPORT',
+        entityType: 'ALL',
+        entityId: undefined,
+      });
+      await service.uploadOps(userId, clientId, [existingOp]);
+
+      const results = await service.uploadOps(
+        userId,
+        clientId,
+        [replacement, { ...replacement }],
+        true,
+      );
+
+      expect(results).toHaveLength(2);
+      expect(results.every(({ accepted }) => !accepted)).toBe(true);
+      expect(results[1].errorCode).toBe(SYNC_ERROR_CODES.DUPLICATE_OPERATION);
+      expect(testState.operations.has(existingOp.id)).toBe(true);
+      expect(testState.operations.has(replacement.id)).toBe(false);
+    });
+
+    it('does not wipe existing data for an empty clean-slate upload', async () => {
+      const service = getSyncService();
+      const existingOp = makeOp({ id: 'existing-before-empty-clean-slate' });
+      await service.uploadOps(userId, clientId, [existingOp]);
+
+      const results = await service.uploadOps(userId, clientId, [], true);
+
+      expect(results).toEqual([]);
+      expect(testState.operations.has(existingOp.id)).toBe(true);
     });
 
     it('should handle multiple operations in order', async () => {
@@ -708,15 +1205,157 @@ describe('SyncService', () => {
       expect(testState.operations.size).toBe(25);
     });
 
-    it('rejects an intra-batch same-id op as DUPLICATE_OPERATION even when its content differs (deliberate divergence from the legacy per-op path, which yields INVALID_OP_ID)', async () => {
-      // C4: the batch path dedups intra-batch purely by op.id (plan §1a step 2)
-      // and rejects the later op as DUPLICATE_OPERATION regardless of content.
-      // The legacy per-op path inserts the first then catches the second at the
-      // DB and returns INVALID_OP_ID for differing content. Both are terminal
-      // rejections with no row and no sequence gap, so sync invariants hold;
-      // the client treats DUPLICATE_OPERATION as a silent success and
-      // INVALID_OP_ID as a hard rejection. This test pins the chosen batch
-      // semantics so the divergence stays intentional, not accidental drift.
+    it.each([
+      ['legacy serial', false],
+      ['batch', true],
+    ])(
+      'preserves the active full-state author when pruning in the %s path',
+      async (_label, batchUpload) => {
+        const service = new SyncService({ batchUpload });
+        const fullStateAuthor = 'import-author';
+        const uploadClient = 'post-import-client';
+        const fullStateOp = makeOp({
+          clientId: fullStateAuthor,
+          actionType: '[SP_ALL] Load(import) all data',
+          opType: 'SYNC_IMPORT',
+          entityType: 'ALL',
+          entityId: undefined,
+          payload: { TASK: {} },
+          vectorClock: { [fullStateAuthor]: 1 },
+        });
+        const oversizedDelta = makeOp({
+          clientId: uploadClient,
+          entityId: 'post-import-task',
+          vectorClock: {
+            [fullStateAuthor]: 1,
+            [uploadClient]: 2,
+            ...Object.fromEntries(
+              Array.from({ length: 25 }, (_, index) => [
+                `old-client-${index}`,
+                100 + index,
+              ]),
+            ),
+          },
+          timestamp: fullStateOp.timestamp + 1,
+        });
+        const retryDelta = makeOp({
+          ...oversizedDelta,
+          vectorClock: { ...oversizedDelta.vectorClock },
+        });
+
+        expect(
+          (await service.uploadOps(userId, fullStateAuthor, [fullStateOp]))[0].accepted,
+        ).toBe(true);
+        expect(
+          (await service.uploadOps(userId, uploadClient, [oversizedDelta]))[0].accepted,
+        ).toBe(true);
+
+        const storedClock = testState.operations.get(oversizedDelta.id)?.vectorClock as
+          | Record<string, number>
+          | undefined;
+        expect(storedClock).toBeDefined();
+        expect(Object.keys(storedClock ?? {})).toHaveLength(20);
+        expect(storedClock?.[fullStateAuthor]).toBe(1);
+        expect(storedClock?.[uploadClient]).toBe(2);
+
+        expect((await service.uploadOps(userId, uploadClient, [retryDelta]))[0]).toEqual(
+          expect.objectContaining({
+            accepted: false,
+            errorCode: SYNC_ERROR_CODES.DUPLICATE_OPERATION,
+          }),
+        );
+      },
+    );
+
+    it.each([
+      ['legacy serial', false],
+      ['batch', true],
+    ])(
+      'looks the full-state author up at most once per upload in the %s path',
+      async (_label, batchUpload) => {
+        // The answer cannot change mid-transaction unless this upload itself
+        // accepts a full-state op, so one oversized op must not become one query.
+        const service = new SyncService({ batchUpload });
+        const fullStateAuthor = 'import-author';
+        const uploadClient = 'post-import-client';
+        const fullStateOp = makeOp({
+          clientId: fullStateAuthor,
+          actionType: '[SP_ALL] Load(import) all data',
+          opType: 'SYNC_IMPORT',
+          entityType: 'ALL',
+          entityId: undefined,
+          payload: { TASK: {} },
+          vectorClock: { [fullStateAuthor]: 1 },
+        });
+        expect(
+          (await service.uploadOps(userId, fullStateAuthor, [fullStateOp]))[0].accepted,
+        ).toBe(true);
+
+        const oversizedDeltas = Array.from({ length: 5 }, (_, index) =>
+          makeOp({
+            clientId: uploadClient,
+            entityId: `post-import-task-${index}`,
+            vectorClock: {
+              [fullStateAuthor]: 1,
+              [uploadClient]: 2 + index,
+              ...Object.fromEntries(
+                Array.from({ length: 25 }, (_, old) => [`old-client-${old}`, 100 + old]),
+              ),
+            },
+            timestamp: fullStateOp.timestamp + 1 + index,
+          }),
+        );
+
+        testState.fullStateAuthorLookupCount = 0;
+
+        const results = await service.uploadOps(userId, uploadClient, oversizedDeltas);
+        expect(results.every(({ accepted }) => accepted)).toBe(true);
+
+        expect(testState.fullStateAuthorLookupCount).toBe(1);
+        // The saved query must not cost the protection it exists for.
+        for (const delta of oversizedDeltas) {
+          const storedClock = testState.operations.get(delta.id)?.vectorClock as
+            | Record<string, number>
+            | undefined;
+          expect(Object.keys(storedClock ?? {})).toHaveLength(20);
+          expect(storedClock?.[fullStateAuthor]).toBe(1);
+        }
+      },
+    );
+
+    it.each([
+      ['legacy serial', false],
+      ['batch', true],
+    ])(
+      'rejects a request-start occupied ID in the %s path after its row disappears',
+      async (_label, batchUpload) => {
+        const service = new SyncService({ batchUpload });
+        const op = makeOp({
+          id: 'occupied-before-quota-cleanup',
+          entityId: 'new-entity-after-cleanup',
+          payload: { title: 'Must not consume unestimated storage' },
+        });
+
+        const results = await service.uploadOps(
+          userId,
+          clientId,
+          [op],
+          undefined,
+          new Set([op.id]),
+        );
+
+        expect(results).toEqual([
+          expect.objectContaining({
+            opId: op.id,
+            accepted: false,
+            errorCode: SYNC_ERROR_CODES.INVALID_OP_ID,
+          }),
+        ]);
+        expect(testState.operations.has(op.id)).toBe(false);
+      },
+    );
+
+    it('rejects an intra-batch same-id collision as INVALID_OP_ID', async () => {
       const service = new SyncService({ batchUpload: true });
       const opId = uuidv7();
       const first = makeOp({
@@ -747,13 +1386,143 @@ describe('SyncService', () => {
       expect(results[1]).toEqual(
         expect.objectContaining({
           accepted: false,
-          errorCode: SYNC_ERROR_CODES.DUPLICATE_OPERATION,
+          errorCode: SYNC_ERROR_CODES.INVALID_OP_ID,
         }),
       );
       // No sequence gap: lastSeq advanced by exactly 1, exactly one row.
       expect(testState.userSyncStates.get(userId)?.lastSeq).toBe(1);
       expect(testState.operations.size).toBe(1);
     });
+
+    it('preserves an exact intra-batch retry as DUPLICATE_OPERATION', async () => {
+      const service = new SyncService({ batchUpload: true });
+      const retry = makeOp({
+        id: uuidv7(),
+        entityId: 'task-1',
+        entityIds: ['task-1', 'task-2'],
+        vectorClock: { [clientId]: 1 },
+      });
+
+      const results = await service.uploadOps(userId, clientId, [retry, { ...retry }]);
+
+      expect(results[0]).toEqual(
+        expect.objectContaining({ accepted: true, serverSeq: 1 }),
+      );
+      expect(results[1]).toEqual(
+        expect.objectContaining({
+          accepted: false,
+          errorCode: SYNC_ERROR_CODES.DUPLICATE_OPERATION,
+        }),
+      );
+    });
+
+    it('terminally rejects a later serial same-ID sibling when the first one conflicts', async () => {
+      const service = new SyncService({ batchUpload: false });
+      const otherClientId = 'other-device';
+      const existing = makeOp({
+        id: 'existing-op',
+        clientId: otherClientId,
+        entityId: 'blocked-task',
+        vectorClock: { [otherClientId]: 1 },
+      });
+      expect(
+        (await service.uploadOps(userId, otherClientId, [existing]))[0].accepted,
+      ).toBe(true);
+
+      const repeatedId = 'repeated-request-id';
+      const first = makeOp({
+        id: repeatedId,
+        entityId: 'blocked-task',
+        payload: { title: 'small' },
+        vectorClock: { [clientId]: 1 },
+      });
+      const laterLargeSibling = makeOp({
+        id: repeatedId,
+        entityId: 'fresh-task',
+        payload: { data: 'x'.repeat(10_000) },
+        vectorClock: { [clientId]: 2 },
+        timestamp: first.timestamp + 1,
+      });
+
+      const results = await service.uploadOps(userId, clientId, [
+        first,
+        laterLargeSibling,
+      ]);
+
+      expect(results[0]).toEqual(
+        expect.objectContaining({
+          accepted: false,
+          errorCode: SYNC_ERROR_CODES.CONFLICT_CONCURRENT,
+        }),
+      );
+      expect(results[1]).toEqual(
+        expect.objectContaining({
+          accepted: false,
+          errorCode: SYNC_ERROR_CODES.INVALID_OP_ID,
+        }),
+      );
+      expect(testState.operations.has(repeatedId)).toBe(false);
+    });
+
+    it('redacts malformed operation metadata from audit logs', async () => {
+      const service = new SyncService({ batchUpload: false });
+      const privateText = 'private task title that must not be logged';
+      const auditSpy = vi.spyOn(Logger, 'audit').mockImplementation(() => undefined);
+      const malformed = makeOp({
+        id: privateText,
+        entityType: privateText,
+      });
+
+      const result = await service.uploadOps(userId, clientId, [malformed]);
+
+      expect(result[0].accepted).toBe(false);
+      const rejection = auditSpy.mock.calls
+        .map(([entry]) => entry)
+        .find((entry) => entry.event === 'OP_REJECTED');
+      expect(rejection).toBeDefined();
+      expect(rejection?.opId).toBe('[invalid]');
+      expect(rejection?.entityType).toBe('[invalid]');
+      expect(rejection?.reason).toBe(SYNC_ERROR_CODES.INVALID_ENTITY_TYPE);
+      expect(JSON.stringify(rejection)).not.toContain(privateText);
+    });
+
+    it.each([
+      ['serial', false],
+      ['batch', true],
+    ])(
+      'terminally rejects a valid %s sibling whose ID was reserved by an invalid op',
+      async (_label, batchUpload) => {
+        const service = new SyncService({ batchUpload });
+        const invalidFirst = makeOp({
+          id: 'invalid-first-shared-id',
+          entityType: 'INVALID_ENTITY_TYPE',
+        });
+        const laterLargeSibling = makeOp({
+          id: invalidFirst.id,
+          entityId: 'fresh-task',
+          payload: { data: 'x'.repeat(10_000) },
+        });
+
+        const results = await service.uploadOps(userId, clientId, [
+          invalidFirst,
+          laterLargeSibling,
+        ]);
+
+        expect(results[0]).toEqual(
+          expect.objectContaining({
+            accepted: false,
+            errorCode: SYNC_ERROR_CODES.INVALID_ENTITY_TYPE,
+          }),
+        );
+        expect(results[1]).toEqual(
+          expect.objectContaining({
+            accepted: false,
+            errorCode: SYNC_ERROR_CODES.INVALID_OP_ID,
+          }),
+        );
+        expect(testState.operations.has(invalidFirst.id)).toBe(false);
+      },
+    );
 
     it('should reject intra-batch entity conflicts in order', async () => {
       const service = new SyncService({ batchUpload: true });
@@ -795,6 +1564,153 @@ describe('SyncService', () => {
       );
       expect(testState.userSyncStates.get(userId)?.lastSeq).toBe(1);
       expect(testState.operations.size).toBe(1);
+    });
+
+    it.each([
+      ['serial', false],
+      ['batch', true],
+    ])(
+      'rejects a v2 tasks write against an already-stored raw v1 misc row in the %s path',
+      async (_label, batchUpload) => {
+        const legacyClientId = 'legacy-client';
+        testState.userSyncStates.set(userId, { userId, lastSeq: 1 });
+        testState.serverSeqCounter = 1;
+        testState.operations.set('stored-legacy-misc', {
+          id: 'stored-legacy-misc',
+          userId,
+          clientId: legacyClientId,
+          serverSeq: 1,
+          actionType: '[GLOBAL_CONFIG] Update section',
+          opType: 'UPD',
+          entityType: 'GLOBAL_CONFIG',
+          entityId: 'misc',
+          entityIds: [],
+          payload: {
+            sectionKey: 'misc',
+            sectionCfg: { defaultProjectId: 'legacy-project' },
+          },
+          payloadBytes: BigInt(10),
+          vectorClock: { [legacyClientId]: 1 },
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now() - 1_000),
+          receivedAt: BigInt(Date.now() - 1_000),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+        });
+
+        const service = new SyncService({ batchUpload });
+        const result = await service.uploadOps(userId, clientId, [
+          makeGlobalConfigOp({
+            id: 'current-tasks-write',
+            entityId: 'tasks',
+            payload: {
+              sectionKey: 'tasks',
+              sectionCfg: { defaultProjectId: 'current-project' },
+            },
+            vectorClock: { [clientId]: 1 },
+            schemaVersion: CURRENT_SCHEMA_VERSION,
+          }),
+        ]);
+
+        expect(result).toEqual([
+          expect.objectContaining({
+            opId: 'current-tasks-write',
+            accepted: false,
+            errorCode: SYNC_ERROR_CODES.CONFLICT_CONCURRENT,
+            existingClock: { [legacyClientId]: 1 },
+          }),
+        ]);
+        expect(testState.operations.size).toBe(1);
+      },
+    );
+
+    it.each([
+      ['serial', false],
+      ['batch', true],
+    ])(
+      'atomically rejects a new mixed v1 misc upload that conflicts with v2 tasks in the %s path',
+      async (_label, batchUpload) => {
+        const currentClientId = 'current-client';
+        const service = new SyncService({ batchUpload });
+        const currentResult = await service.uploadOps(userId, currentClientId, [
+          makeGlobalConfigOp({
+            id: 'existing-current-tasks',
+            clientId: currentClientId,
+            entityId: 'tasks',
+            payload: {
+              sectionKey: 'tasks',
+              sectionCfg: { defaultProjectId: 'current-project' },
+            },
+            vectorClock: { [currentClientId]: 1 },
+            schemaVersion: CURRENT_SCHEMA_VERSION,
+          }),
+        ]);
+        expect(currentResult[0].accepted).toBe(true);
+
+        const sourceId = 'incoming-legacy-mixed';
+        const legacyResult = await service.uploadOps(userId, clientId, [
+          makeGlobalConfigOp({
+            id: sourceId,
+            payload: {
+              sectionKey: 'misc',
+              sectionCfg: {
+                defaultProjectId: 'legacy-project',
+                isMinimizeToTray: true,
+              },
+            },
+            vectorClock: { [clientId]: 1 },
+            schemaVersion: 1,
+          }),
+        ]);
+
+        expect(legacyResult).toEqual([
+          expect.objectContaining({
+            opId: sourceId,
+            accepted: false,
+            errorCode: SYNC_ERROR_CODES.CONFLICT_CONCURRENT,
+            existingClock: { [currentClientId]: 1 },
+          }),
+        ]);
+        expect(testState.operations.has(`${sourceId}_misc`)).toBe(false);
+        expect(testState.operations.has(`${sourceId}_tasks`)).toBe(false);
+        expect(testState.operations.has(sourceId)).toBe(false);
+        expect(testState.operations.size).toBe(1);
+      },
+    );
+
+    it('should preserve concurrent additive task-time deltas within one batch', async () => {
+      const service = new SyncService({ batchUpload: true });
+      const makeTaskTimeOp = (
+        id: string,
+        vectorClock: Record<string, number>,
+        duration: number,
+      ): Operation => ({
+        id,
+        clientId,
+        actionType: '[TimeTracking] Sync time spent',
+        opType: 'UPD',
+        entityType: 'TASK',
+        entityId: 'task-1',
+        payload: {
+          actionPayload: {
+            taskId: 'task-1',
+            date: '2026-07-13',
+            duration,
+          },
+          entityChanges: [],
+        },
+        vectorClock,
+        timestamp: Date.now(),
+        schemaVersion: 1,
+      });
+
+      const results = await service.uploadOps(userId, clientId, [
+        makeTaskTimeOp(uuidv7(), { [clientId]: 1 }, 5000),
+        makeTaskTimeOp(uuidv7(), { 'other-client': 1 }, 7000),
+      ]);
+
+      expect(results.every((result) => result.accepted)).toBe(true);
+      expect(testState.operations.size).toBe(2);
     });
 
     it('should use entityIds when prefetching batch conflicts', async () => {
@@ -844,23 +1760,62 @@ describe('SyncService', () => {
       expect(testState.userSyncStates.get(userId)?.lastSeq).toBe(1);
     });
 
-    it('should chunk large batch entity prefetch queries', async () => {
-      const entityPairs = Array.from({ length: 250 }, (_, index) => ({
-        entityType: 'TASK',
-        entityId: `task-${index}`,
-      }));
-      const tx = {
-        $queryRaw: vi.fn().mockResolvedValue([]),
-      };
+    it.each([
+      CONFLICT_DETECTION_ENTITY_BATCH_SIZE,
+      CONFLICT_DETECTION_ENTITY_BATCH_SIZE + 1,
+    ])(
+      'should include the boundary pair and chunk correctly for %i pairs',
+      async (pairCount) => {
+        const boundaryIndex = pairCount - 1;
+        const expectedBatchSizes =
+          pairCount > CONFLICT_DETECTION_ENTITY_BATCH_SIZE
+            ? [CONFLICT_DETECTION_ENTITY_BATCH_SIZE, 1]
+            : [CONFLICT_DETECTION_ENTITY_BATCH_SIZE];
+        const entityPairs = Array.from({ length: pairCount }, (_, index) => ({
+          entityType: 'TASK',
+          entityId: `task-${index}`,
+        }));
+        const boundaryPair = entityPairs[boundaryIndex];
+        const boundaryRow = {
+          ...boundaryPair,
+          clientId: 'other-client',
+          actionType: 'UPDATE_TASK',
+          vectorClock: { 'other-client': 1 },
+          serverSeq: 1,
+        };
+        const queriedBatchSizes: number[] = [];
+        const tx = {
+          $queryRaw: vi
+            .fn()
+            .mockImplementation(async (_strings: unknown, ...params: unknown[]) => {
+              const touchedPairValues = (params[0] as Prisma.Sql).values;
+              queriedBatchSizes.push(touchedPairValues.length / 2);
+              for (let index = 0; index < touchedPairValues.length; index += 2) {
+                if (
+                  touchedPairValues[index] === boundaryPair.entityType &&
+                  touchedPairValues[index + 1] === boundaryPair.entityId
+                ) {
+                  return [boundaryRow];
+                }
+              }
+              return [];
+            }),
+        };
 
-      await prefetchLatestEntityOpsForBatch(
-        userId,
-        entityPairs,
-        tx as unknown as Prisma.TransactionClient,
-      );
+        const latestByEntity = await prefetchLatestEntityOpsForBatch(
+          userId,
+          entityPairs,
+          tx as unknown as Prisma.TransactionClient,
+        );
 
-      expect(tx.$queryRaw).toHaveBeenCalledTimes(3);
-    });
+        expect(
+          latestByEntity.get(
+            getEntityConflictKey(boundaryPair.entityType, boundaryPair.entityId),
+          ),
+        ).toEqual(boundaryRow);
+        expect(queriedBatchSizes).toEqual(expectedBatchSizes);
+      },
+    );
 
     it('should create user sync state for first-time batch uploads', async () => {
       const service = new SyncService({ batchUpload: true });
@@ -975,6 +1930,7 @@ describe('SyncService', () => {
           lastSeq: 3,
           latestFullStateSeq: 2,
           latestFullStateVectorClock: { [clientId]: 9 },
+          latestStateReplacementSeq: 2,
         }),
       );
       aggregateSpy.mockRestore();
@@ -1276,7 +2232,7 @@ describe('SyncService', () => {
       }
     });
 
-    it('should reject operations that are too old', async () => {
+    it('should accept operations created before the server retention window', async () => {
       const service = getSyncService();
       const tooOld = Date.now() - DEFAULT_SYNC_CONFIG.retentionMs - 10000;
 
@@ -1295,8 +2251,8 @@ describe('SyncService', () => {
 
       const results = await service.uploadOps(userId, clientId, [op]);
 
-      expect(results[0].accepted).toBe(false);
-      expect(results[0].error).toBe('Operation too old');
+      expect(results[0].accepted).toBe(true);
+      expect(testState.operations.get(op.id)?.clientTimestamp).toBe(BigInt(tooOld));
     });
 
     it('should reject operations with payload exceeding size limit', async () => {
@@ -1380,6 +2336,85 @@ describe('SyncService', () => {
       expect(results[0].serverSeq).toBeDefined();
     });
 
+    it('should reject a stale REPAIR without deleting concurrent operations', async () => {
+      const service = getSyncService();
+      const concurrentOp = makeOp({ id: 'concurrent-op' });
+      const repair = makeOp({
+        id: 'stale-repair',
+        actionType: '[Repair] Auto Repair',
+        opType: 'REPAIR',
+        entityType: 'ALL',
+        entityId: undefined,
+        payload: { repaired: true },
+      });
+
+      expect(
+        (await service.uploadOps(userId, clientId, [concurrentOp]))[0].accepted,
+      ).toBe(true);
+
+      const staleResult = await service.uploadOps(
+        userId,
+        clientId,
+        [repair],
+        true,
+        undefined,
+        0,
+      );
+
+      expect(staleResult).toEqual([
+        expect.objectContaining({
+          opId: repair.id,
+          accepted: false,
+          errorCode: SYNC_ERROR_CODES.REPAIR_STALE,
+        }),
+      ]);
+      expect(testState.operations.has(concurrentOp.id)).toBe(true);
+      expect(testState.operations.has(repair.id)).toBe(false);
+
+      const freshRepair = { ...repair, id: 'fresh-repair' };
+      const freshResult = await service.uploadOps(
+        userId,
+        clientId,
+        [freshRepair],
+        true,
+        undefined,
+        1,
+      );
+
+      expect(freshResult[0].accepted).toBe(true);
+      expect(testState.operations.has(concurrentOp.id)).toBe(true);
+      expect(testState.operations.has(freshRepair.id)).toBe(true);
+    });
+
+    it('should accept a legacy REPAIR without deleting retained history', async () => {
+      const service = getSyncService();
+      const concurrentOp = makeOp({ id: 'concurrent-op' });
+      const legacyRepair = makeOp({
+        id: 'legacy-repair',
+        actionType: '[Repair] Auto Repair',
+        opType: 'REPAIR',
+        entityType: 'ALL',
+        entityId: undefined,
+        payload: { repaired: true },
+      });
+      await service.uploadOps(userId, clientId, [concurrentOp]);
+
+      const result = await service.uploadOps(
+        userId,
+        clientId,
+        [legacyRepair],
+        true,
+        undefined,
+        undefined,
+        true,
+      );
+
+      expect(result[0].accepted).toBe(true);
+      expect(testState.operations.has(concurrentOp.id)).toBe(true);
+      expect(testState.operations.has(legacyRepair.id)).toBe(true);
+      expect(testState.userSyncStates.get(userId)?.latestFullStateSeq).toBeUndefined();
+    });
+
     it('should accept complex payloads for BACKUP_IMPORT operations', async () => {
       const service = getSyncService();
 
@@ -1428,7 +2463,14 @@ describe('SyncService', () => {
         schemaVersion: 1,
       };
 
-      const results = await service.uploadOps(userId, clientId, [op]);
+      const results = await service.uploadOps(
+        userId,
+        clientId,
+        [op],
+        false,
+        undefined,
+        0,
+      );
 
       expect(results[0].accepted).toBe(true);
       expect(results[0].serverSeq).toBeDefined();
@@ -1990,7 +3032,32 @@ describe('SyncService', () => {
   });
 
   describe('cleanup', () => {
-    it('should delete old operations (time-based)', async () => {
+    const seedFullStateOp = (
+      targetUserId: number,
+      serverSeq: number,
+      receivedAt: bigint,
+    ): void => {
+      testState.operations.set(`full-state-${targetUserId}-${serverSeq}`, {
+        id: `full-state-${targetUserId}-${serverSeq}`,
+        userId: targetUserId,
+        clientId: `client-${targetUserId}`,
+        serverSeq,
+        actionType: 'LOAD_ALL_DATA',
+        opType: 'SYNC_IMPORT',
+        entityType: 'ALL',
+        entityId: null,
+        entityIds: [],
+        payload: { appDataComplete: { TASK: {} } },
+        vectorClock: {},
+        schemaVersion: 1,
+        clientTimestamp: BigInt(Date.now()),
+        receivedAt,
+        isPayloadEncrypted: false,
+        syncImportReason: null,
+      });
+    };
+
+    it('should not delete old operations when no full-state base exists', async () => {
       const service = getSyncService();
 
       // Upload operations
@@ -2018,8 +3085,6 @@ describe('SyncService', () => {
         }
       }
 
-      // Set up userSyncState with required fields for cleanup
-      // The cleanup requires lastSnapshotSeq and snapshotAt to be set
       const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000; // 50 days ago
       testState.userSyncStates.set(userId, {
         userId,
@@ -2028,18 +3093,345 @@ describe('SyncService', () => {
         snapshotAt: BigInt(Date.now()), // Snapshot taken recently (>= cutoffTime)
       });
 
+      // No causal full-state op exists anywhere in the history, so the user
+      // never becomes a sweep candidate — nothing is deleted, snapshot or not.
       const { totalDeleted, affectedUserIds } =
         await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
 
-      expect(totalDeleted).toBe(2);
+      expect(totalDeleted).toBe(0);
+      expect(affectedUserIds).not.toContain(userId);
+
+      const remaining = (await operationDownloadService.getOpsSinceWithSeq(userId, 0))
+        .ops;
+      expect(remaining).toHaveLength(5);
+    });
+
+    it('warns and skips a snapshot-capped user with no causal base below the cursor', async () => {
+      // The causal boundary (seq 5) sits ABOVE the cached-snapshot cursor
+      // (seq 4). While the cursor exists the boundary may not pass it, and no
+      // causal full-state op exists at or below it → skip with a warning.
+      const service = getSyncService();
+      const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+      const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+
+      for (let i = 1; i <= 4; i++) {
+        testState.operations.set(`old-op-${i}`, {
+          id: `old-op-${i}`,
+          userId,
+          clientId,
+          serverSeq: i,
+          actionType: 'ADD',
+          opType: 'CRT',
+          entityType: 'TASK',
+          entityId: `t${i}`,
+          entityIds: [],
+          payload: {},
+          vectorClock: {},
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now()),
+          receivedAt: BigInt(cutoffTime - 1),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+          repairBaseServerSeq: null,
+        });
+      }
+      seedFullStateOp(userId, 5, BigInt(cutoffTime - 1));
+
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 5,
+        lastSnapshotSeq: 4,
+        snapshotAt: BigInt(Date.now()),
+        // The cap keys on the cached BLOB, not on the cursor (#9688): without
+        // snapshotData this user takes the uncapped path and prunes to seq 5.
+        snapshotData: Buffer.from('legacy-cached-snapshot'),
+      });
+
+      try {
+        const { totalDeleted, affectedUserIds } =
+          await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
+
+        expect(totalDeleted).toBe(0);
+        expect(affectedUserIds).not.toContain(userId);
+        expect(warnSpy).toHaveBeenCalledWith(
+          'Cleanup [old-ops]: skipped 1 snapshot-capped user(s) without a causal ' +
+            'full-state op at or below their snapshot cursor; their operation ' +
+            'histories were left intact.',
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('prunes past a stale snapshot cursor once the cached blob is gone', async () => {
+      // Same shape as the capped case above, minus the cached snapshot BLOB.
+      // Under mandatory E2EE the server stops caching snapshots, so
+      // lastSnapshotSeq freezes at a stale value for the whole fleet (#9688):
+      // capping on the cursor would exempt everyone from the sweep forever.
+      const service = getSyncService();
+      const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+
+      for (let i = 1; i <= 4; i++) {
+        testState.operations.set(`old-op-${i}`, {
+          id: `old-op-${i}`,
+          userId,
+          clientId,
+          serverSeq: i,
+          actionType: 'ADD',
+          opType: 'CRT',
+          entityType: 'TASK',
+          entityId: `t${i}`,
+          entityIds: [],
+          payload: {},
+          vectorClock: {},
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now()),
+          receivedAt: BigInt(cutoffTime - 1),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+          repairBaseServerSeq: null,
+        });
+      }
+      seedFullStateOp(userId, 5, BigInt(cutoffTime - 1));
+
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 5,
+        lastSnapshotSeq: 4,
+        snapshotAt: BigInt(Date.now()),
+      });
+
+      const { totalDeleted, affectedUserIds } =
+        await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
+
+      expect(totalDeleted).toBe(4);
       expect(affectedUserIds).toContain(userId);
 
       const remaining = (await operationDownloadService.getOpsSinceWithSeq(userId, 0))
         .ops;
-      expect(remaining).toHaveLength(3);
+      expect(remaining.map((op) => op.serverSeq)).toEqual([5]);
     });
 
-    it('drains a single user up to the per-run budget', async () => {
+    it('should preserve the latest full-state operation and its replay tail', async () => {
+      const service = getSyncService();
+      const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+
+      for (let i = 1; i <= 5; i++) {
+        const isFullState = i === 2 || i === 4;
+        testState.operations.set(`old-op-${i}`, {
+          id: `old-op-${i}`,
+          userId,
+          clientId,
+          serverSeq: i,
+          actionType: isFullState ? 'LOAD_ALL_DATA' : 'ADD',
+          opType: i === 2 ? 'BACKUP_IMPORT' : i === 4 ? 'REPAIR' : 'CRT',
+          entityType: isFullState ? 'ALL' : 'TASK',
+          entityId: isFullState ? null : `t${i}`,
+          entityIds: [],
+          payload: isFullState ? { appDataComplete: { TASK: {} } } : {},
+          vectorClock: {},
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now()),
+          receivedAt: BigInt(cutoffTime - 1),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+          // seq 4 is a CAUSAL repair (base cursor set), so the marker at seq 4 is
+          // a valid pruning boundary once its causality is confirmed.
+          repairBaseServerSeq: i === 4 ? 3 : null,
+        });
+      }
+
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 5,
+        lastSnapshotSeq: 4,
+        snapshotAt: BigInt(Date.now()),
+        latestFullStateSeq: 4,
+      });
+
+      const { totalDeleted } = await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
+
+      expect(totalDeleted).toBe(3);
+      expect(Array.from(testState.operations.keys())).toEqual(['old-op-4', 'old-op-5']);
+      const freshClientOps = (
+        await operationDownloadService.getOpsSinceWithSeq(userId, 0)
+      ).ops;
+      expect(freshClientOps.map((op) => op.serverSeq)).toEqual([4, 5]);
+    });
+
+    it('prunes the superseded prefix for a lapsed user whose snapshot predates the cutoff', async () => {
+      // Regression for the inverted retention gate: the sweep used to skip any
+      // user whose snapshotAt was OLDER than the retention cutoff, so exactly
+      // the long-lapsed cohort kept its full operation history forever while
+      // deleteStaleDevices pruned the same users' device rows unconditionally.
+      // Snapshot age buys no safety here — pruning is bounded by the validated
+      // causal full-state op (protectedFromSeq ≤ lastSnapshotSeq), which keeps
+      // the replay base, its tail, and the cached snapshot's tail intact
+      // regardless of when the snapshot was taken.
+      const service = getSyncService();
+      const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+
+      for (let i = 1; i <= 5; i++) {
+        const isFullState = i === 4;
+        testState.operations.set(`old-op-${i}`, {
+          id: `old-op-${i}`,
+          userId,
+          clientId,
+          serverSeq: i,
+          actionType: isFullState ? 'LOAD_ALL_DATA' : 'ADD',
+          opType: isFullState ? 'SYNC_IMPORT' : 'CRT',
+          entityType: isFullState ? 'ALL' : 'TASK',
+          entityId: isFullState ? null : `t${i}`,
+          entityIds: [],
+          payload: isFullState ? { appDataComplete: { TASK: {} } } : {},
+          vectorClock: {},
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now()),
+          receivedAt: BigInt(cutoffTime - 1),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+          repairBaseServerSeq: null,
+        });
+      }
+
+      // Snapshot taken 100 days ago — well before the cutoff (lapsed user).
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 5,
+        lastSnapshotSeq: 4,
+        snapshotAt: BigInt(Date.now() - 100 * 24 * 60 * 60 * 1000),
+        latestFullStateSeq: 4,
+      });
+
+      const { totalDeleted, affectedUserIds } =
+        await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
+
+      expect(totalDeleted).toBe(3);
+      expect(affectedUserIds).toContain(userId);
+      expect(Array.from(testState.operations.keys())).toEqual(['old-op-4', 'old-op-5']);
+    });
+
+    it('does not prune history behind a stale latestFullStateSeq marker pointing at a legacy REPAIR (primary path)', async () => {
+      // Installs upgraded from before the causal-marker migration can carry a
+      // `latestFullStateSeq` pointing at a legacy REPAIR (repairBaseServerSeq
+      // NULL) — the migration added no backfill to clear it. The sweep no
+      // longer consults the marker at all: the boundary groupBy selects only
+      // causal full-state rows, so a legacy REPAIR (with or without a stale
+      // marker pointing at it) never authorizes pruning.
+      const service = getSyncService();
+      const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+
+      for (let i = 1; i <= 5; i++) {
+        const isLegacyRepair = i === 4;
+        testState.operations.set(`old-op-${i}`, {
+          id: `old-op-${i}`,
+          userId,
+          clientId,
+          serverSeq: i,
+          actionType: isLegacyRepair ? 'LOAD_ALL_DATA' : 'ADD',
+          opType: isLegacyRepair ? 'REPAIR' : 'CRT',
+          entityType: isLegacyRepair ? 'ALL' : 'TASK',
+          entityId: isLegacyRepair ? null : `t${i}`,
+          entityIds: [],
+          payload: isLegacyRepair ? { appDataComplete: { TASK: {} } } : {},
+          vectorClock: {},
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now()),
+          receivedAt: BigInt(cutoffTime - 1),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+          // Legacy REPAIR = no causal base cursor.
+          repairBaseServerSeq: null,
+        });
+      }
+
+      // Stale marker: points at the markerless legacy REPAIR at seq 4.
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 5,
+        lastSnapshotSeq: 4,
+        snapshotAt: BigInt(Date.now()),
+        latestFullStateSeq: 4,
+      });
+
+      const { totalDeleted, affectedUserIds } =
+        await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
+
+      expect(totalDeleted).toBe(0);
+      expect(affectedUserIds).not.toContain(userId);
+      expect(Array.from(testState.operations.keys())).toEqual([
+        'old-op-1',
+        'old-op-2',
+        'old-op-3',
+        'old-op-4',
+        'old-op-5',
+      ]);
+    });
+
+    it('does not prune history behind a legacy REPAIR without a causal base (no marker)', async () => {
+      // The boundary query must use the causal-only full-state predicate, like
+      // every other full-state query. A legacy REPAIR carries appDataComplete
+      // but no `repairBaseServerSeq` proving its state is current as of its
+      // seq, so it must NEVER authorize history pruning — ops between its
+      // logical base and its seq would be lost for a device replaying from
+      // before it. Such a user has no causal boundary and never becomes a
+      // sweep candidate.
+      const service = getSyncService();
+      const warnSpy = vi.spyOn(Logger, 'warn').mockImplementation(() => undefined);
+      const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+
+      for (let i = 1; i <= 5; i++) {
+        const isLegacyRepair = i === 4;
+        testState.operations.set(`old-op-${i}`, {
+          id: `old-op-${i}`,
+          userId,
+          clientId,
+          serverSeq: i,
+          actionType: isLegacyRepair ? 'LOAD_ALL_DATA' : 'ADD',
+          opType: isLegacyRepair ? 'REPAIR' : 'CRT',
+          entityType: isLegacyRepair ? 'ALL' : 'TASK',
+          entityId: isLegacyRepair ? null : `t${i}`,
+          entityIds: [],
+          payload: isLegacyRepair ? { appDataComplete: { TASK: {} } } : {},
+          vectorClock: {},
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now()),
+          receivedAt: BigInt(cutoffTime - 1),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+          // Legacy REPAIR = no causal base cursor.
+          repairBaseServerSeq: null,
+        });
+      }
+
+      // latestFullStateSeq deliberately unset → cleanup takes the fallback query
+      // path (the branch this fix hardens).
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: 5,
+        lastSnapshotSeq: 5,
+        snapshotAt: BigInt(Date.now()),
+      });
+
+      try {
+        const { totalDeleted, affectedUserIds } =
+          await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
+
+        expect(totalDeleted).toBe(0);
+        expect(affectedUserIds).not.toContain(userId);
+        expect(Array.from(testState.operations.keys())).toEqual([
+          'old-op-1',
+          'old-op-2',
+          'old-op-3',
+          'old-op-4',
+          'old-op-5',
+        ]);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('drains a user past the per-run budget rather than truncating their prefix', async () => {
       const service = getSyncService();
       process.env.OLD_OPS_CLEANUP_DELETE_BATCH_SIZE = '50';
       process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN = '250';
@@ -2065,11 +3457,12 @@ describe('SyncService', () => {
           syncImportReason: null,
         });
       }
+      seedFullStateOp(userId, totalOps + 1, BigInt(cutoffTime - 1));
 
       testState.userSyncStates.set(userId, {
         userId,
-        lastSeq: totalOps,
-        lastSnapshotSeq: totalOps,
+        lastSeq: totalOps + 1,
+        lastSnapshotSeq: totalOps + 1,
         snapshotAt: BigInt(Date.now()),
       });
 
@@ -2080,12 +3473,68 @@ describe('SyncService', () => {
 
       // Per-run budget is larger than one delete batch. The inner drain loop keeps
       // deleting until the budget hits zero, not just one batch.
-      expect(totalDeleted).toBe(250);
+      // Regression for the truncated-prefix bug: with a 250-op budget and a
+      // 255-op prefix, the drain used to stop at 250 and leave a plain CRT
+      // delta (seq 251) as the lowest surviving row, which makes every
+      // restore target throw SNAPSHOT_REPLAY_INCOMPLETE. The budget gates
+      // which users we start, not where we stop inside one, so this user
+      // drains whole and overshoots by 5.
+      expect(totalDeleted).toBe(255);
       expect(affectedUserIds).toEqual([userId]);
-      expect(testState.operations.size).toBe(5);
+      const survivors = Array.from(testState.operations.values())
+        .filter((op) => op.userId === userId)
+        .sort((a, b) => a.serverSeq - b.serverSeq);
+      expect(survivors.map((op) => op.serverSeq)).toEqual([totalOps + 1]);
+      expect(survivors[0].opType).toBe('SYNC_IMPORT');
     });
 
-    it('marks user for reconcile when a later batch throws mid-loop', async () => {
+    it('deletes nothing when the per-run budget is set to 0', async () => {
+      const service = getSyncService();
+      process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN = '0';
+      const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+
+      for (let i = 1; i <= 3; i++) {
+        testState.operations.set(`old-op-${i}`, {
+          id: `old-op-${i}`,
+          userId,
+          clientId,
+          serverSeq: i,
+          actionType: 'ADD',
+          opType: 'CRT',
+          entityType: 'TASK',
+          entityId: `t${i}`,
+          payload: {},
+          vectorClock: {},
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now()),
+          receivedAt: BigInt(cutoffTime - 1),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+        });
+      }
+      seedFullStateOp(userId, 4, BigInt(cutoffTime - 1));
+
+      const groupBySpy = vi.mocked(prisma.operation.groupBy);
+      groupBySpy.mockClear();
+      try {
+        const { totalDeleted, affectedUserIds } =
+          await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
+
+        // The operator brake. `parsePositiveIntegerEnv` rejects 0 and falls
+        // back to the default, so without the explicit decode this knob would
+        // silently mean 25 000 — and there is no other way to stop an
+        // irreversible, default-on sweep short of patching the image.
+        expect(totalDeleted).toBe(0);
+        expect(affectedUserIds).toEqual([]);
+        expect(testState.operations.size).toBe(4);
+        // Disabled must also cost nothing: no fleet-wide scan of `operations`.
+        expect(groupBySpy).not.toHaveBeenCalled();
+      } finally {
+        delete process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN;
+      }
+    });
+
+    it('keeps draining when a concurrent delete shrinks a batch row count', async () => {
       const service = getSyncService();
       process.env.OLD_OPS_CLEANUP_DELETE_BATCH_SIZE = '50';
       process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN = '250';
@@ -2111,20 +3560,122 @@ describe('SyncService', () => {
           syncImportReason: null,
         });
       }
+      seedFullStateOp(userId, totalOps + 1, BigInt(cutoffTime - 1));
 
       testState.userSyncStates.set(userId, {
         userId,
-        lastSeq: totalOps,
-        lastSnapshotSeq: totalOps,
+        lastSeq: totalOps + 1,
+        lastSnapshotSeq: totalOps + 1,
         snapshotAt: BigInt(Date.now()),
       });
+
+      // Quota recovery (deleteOldestRestorePointAndOps) runs unlocked against
+      // the same user while the sweep is mid-drain — the sweep does NOT take
+      // runWithStorageUsageLock, the upload path does. Simulate it landing
+      // between the sweep's findMany (which selected 50 ids) and its
+      // deleteMany: two of those rows are already gone, so deleteMany reports
+      // 48. That is fewer rows than the batch size, but the user is NOT empty.
+      const deleteManySpy = vi.mocked(prisma.operation.deleteMany) as unknown as {
+        getMockImplementation: () => (args: any) => Promise<{ count: number }>;
+        mockImplementation: (fn: (args: any) => Promise<{ count: number }>) => void;
+      };
+      const originalDeleteMany = deleteManySpy.getMockImplementation();
+      let interceptedBatches = 0;
+      deleteManySpy.mockImplementation(async (args: any) => {
+        if (interceptedBatches === 0) {
+          interceptedBatches += 1;
+          for (const id of (args.where?.id?.in ?? []).slice(0, 2)) {
+            testState.operations.delete(id);
+          }
+        }
+        return originalDeleteMany(args);
+      });
+
+      try {
+        await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
+      } finally {
+        deleteManySpy.mockImplementation(originalDeleteMany);
+        delete process.env.OLD_OPS_CLEANUP_DELETE_BATCH_SIZE;
+        delete process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN;
+      }
+
+      // A short row count must mean "these rows are gone", never "this user is
+      // drained". Reading it as the latter stops the loop mid-prefix and
+      // leaves a plain CRT delta as the lowest surviving row — the exact
+      // SNAPSHOT_REPLAY_INCOMPLETE state the whole-or-nothing rule exists to
+      // prevent, reached here through concurrency instead of the budget.
+      const survivors = Array.from(testState.operations.values())
+        .filter((op) => op.userId === userId)
+        .sort((a, b) => a.serverSeq - b.serverSeq);
+      expect(survivors.map((op) => op.serverSeq)).toEqual([totalOps + 1]);
+      expect(survivors[0].opType).toBe('SYNC_IMPORT');
+    });
+
+    it('marks user for reconcile and keeps going when a batch throws mid-loop', async () => {
+      const service = getSyncService();
+      process.env.OLD_OPS_CLEANUP_DELETE_BATCH_SIZE = '50';
+      process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN = '250';
+      const totalOps = 120;
+      const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+
+      for (let i = 1; i <= totalOps; i++) {
+        testState.operations.set(`old-op-${i}`, {
+          id: `old-op-${i}`,
+          userId,
+          clientId,
+          serverSeq: i,
+          actionType: 'ADD',
+          opType: 'CRT',
+          entityType: 'TASK',
+          entityId: `t${i}`,
+          payload: {},
+          vectorClock: {},
+          schemaVersion: 1,
+          clientTimestamp: BigInt(Date.now()),
+          receivedAt: BigInt(cutoffTime - 1),
+          isPayloadEncrypted: false,
+          syncImportReason: null,
+        });
+      }
+      seedFullStateOp(userId, totalOps + 1, BigInt(cutoffTime - 1));
+
+      testState.userSyncStates.set(userId, {
+        userId,
+        lastSeq: totalOps + 1,
+        lastSnapshotSeq: totalOps + 1,
+        snapshotAt: BigInt(Date.now()),
+      });
+
+      // A second user, ordered after the failing one, proves one user's DB
+      // error does not cost the rest of the fleet a day of retention.
+      const otherUserId = userId + 1;
+      testState.operations.set('other-old-op-1', {
+        id: 'other-old-op-1',
+        userId: otherUserId,
+        clientId: `client-${otherUserId}`,
+        serverSeq: 1,
+        actionType: 'ADD',
+        opType: 'CRT',
+        entityType: 'TASK',
+        entityId: 'ot1',
+        payload: {},
+        vectorClock: {},
+        schemaVersion: 1,
+        clientTimestamp: BigInt(Date.now()),
+        receivedAt: BigInt(cutoffTime - 1),
+        isPayloadEncrypted: false,
+        syncImportReason: null,
+      });
+      seedFullStateOp(otherUserId, 2, BigInt(cutoffTime - 1));
 
       // Let the first batch run normally, then simulate a transient DB error
       // on the second batch. Pre-fix this would leave the storage counter
       // stale-high with no reconcile signal until the next daily pass.
       const serviceWithPrivates = service as unknown as {
         storageQuotaService: {
-          deleteOldSyncedOpsBatch: (...args: unknown[]) => Promise<number>;
+          deleteOldSyncedOpsBatch: (
+            ...args: unknown[]
+          ) => Promise<{ selectedCount: number; deletedCount: number }>;
           needsReconcile: (userId: number) => boolean;
         };
       };
@@ -2136,20 +3687,30 @@ describe('SyncService', () => {
         async (...args: unknown[]) => {
           callCount += 1;
           if (callCount === 1) return originalBatch(...args);
-          throw new Error('simulated transient DB failure');
+          if (args[0] === userId) throw new Error('simulated transient DB failure');
+          return originalBatch(...args);
         },
       );
 
-      await expect(service.deleteOldSyncedOpsForAllUsers(cutoffTime)).rejects.toThrow(
-        'simulated transient DB failure',
-      );
+      const { affectedUserIds } = await service.deleteOldSyncedOpsForAllUsers(cutoffTime);
       delete process.env.OLD_OPS_CLEANUP_DELETE_BATCH_SIZE;
       delete process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN;
+
+      // The failing user is contained, not fatal to the run: the sweep logged
+      // and moved on, so the second user was still serviced.
+      expect(affectedUserIds).toContain(otherUserId);
+      expect(
+        Array.from(testState.operations.values()).filter(
+          (op) => op.userId === otherUserId,
+        ),
+      ).toHaveLength(1);
 
       // First batch committed deletes; the user must still be marked so
       // the next request reconciles the now-stale-high counter.
       expect(storageQuotaService.needsReconcile(userId)).toBe(true);
-      expect(testState.operations.size).toBe(totalOps - 50);
+      expect(
+        Array.from(testState.operations.values()).filter((op) => op.userId === userId),
+      ).toHaveLength(totalOps + 1 - 50);
     });
 
     it('shares the per-run budget across users; tail users wait for next pass', async () => {
@@ -2157,18 +3718,24 @@ describe('SyncService', () => {
       process.env.OLD_OPS_CLEANUP_DELETE_BATCH_SIZE = '50';
       process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN = '250';
       const user2Id = 2;
+      const user3Id = 3;
       const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
 
-      testState.users.set(user2Id, {
-        id: user2Id,
-        email: 'test2@test.com',
-        storageQuotaBytes: BigInt(100 * 1024 * 1024),
-        storageUsedBytes: BigInt(0),
-      });
+      for (const uid of [user2Id, user3Id]) {
+        testState.users.set(uid, {
+          id: uid,
+          email: `test${uid}@test.com`,
+          storageQuotaBytes: BigInt(100 * 1024 * 1024),
+          storageUsedBytes: BigInt(0),
+        });
+      }
 
-      // Each user has 200 stale ops — more than the 250 per-run budget combined.
+      // Three users × 200 stale ops against a 250-op budget: user1 drains
+      // whole (overshooting nothing), user2 starts because 50 budget remained
+      // and also drains whole (overshooting by 150), and user3 is never
+      // started because the budget is spent. No prefix is ever truncated.
       const opsPerUser = 200;
-      for (const uid of [userId, user2Id]) {
+      for (const uid of [userId, user2Id, user3Id]) {
         for (let i = 1; i <= opsPerUser; i++) {
           testState.operations.set(`u${uid}-op-${i}`, {
             id: `u${uid}-op-${i}`,
@@ -2188,21 +3755,28 @@ describe('SyncService', () => {
             syncImportReason: null,
           });
         }
+        seedFullStateOp(uid, opsPerUser + 1, BigInt(cutoffTime - 1));
       }
 
       // userSyncStates are processed by `orderBy: snapshotAt asc`, so the
       // stalest snapshot wins the budget first. user1 here is staler.
       testState.userSyncStates.set(userId, {
         userId,
-        lastSeq: opsPerUser,
-        lastSnapshotSeq: opsPerUser,
+        lastSeq: opsPerUser + 1,
+        lastSnapshotSeq: opsPerUser + 1,
         snapshotAt: BigInt(Date.now() - 1000),
       });
       testState.userSyncStates.set(user2Id, {
         userId: user2Id,
-        lastSeq: opsPerUser,
-        lastSnapshotSeq: opsPerUser,
+        lastSeq: opsPerUser + 1,
+        lastSnapshotSeq: opsPerUser + 1,
         snapshotAt: BigInt(Date.now()),
+      });
+      testState.userSyncStates.set(user3Id, {
+        userId: user3Id,
+        lastSeq: opsPerUser + 1,
+        lastSnapshotSeq: opsPerUser + 1,
+        snapshotAt: BigInt(Date.now() + 1000),
       });
 
       const { totalDeleted, affectedUserIds } =
@@ -2210,10 +3784,18 @@ describe('SyncService', () => {
       delete process.env.OLD_OPS_CLEANUP_DELETE_BATCH_SIZE;
       delete process.env.OLD_OPS_CLEANUP_MAX_DELETED_PER_RUN;
 
-      // user1 drains fully, user2 only gets the remaining budget.
-      expect(totalDeleted).toBe(250);
+      expect(totalDeleted).toBe(400);
       expect(affectedUserIds).toEqual([userId, user2Id]);
-      expect(testState.operations.size).toBe(150);
+      // Every touched user is left with their full-state op as the lowest
+      // surviving row; the untouched tail user keeps their whole history.
+      const lowestSurvivorOf = (uid: number): Record<string, unknown> =>
+        Array.from(testState.operations.values())
+          .filter((op) => op.userId === uid)
+          .sort((a, b) => a.serverSeq - b.serverSeq)[0];
+      expect(lowestSurvivorOf(userId).opType).toBe('SYNC_IMPORT');
+      expect(lowestSurvivorOf(user2Id).opType).toBe('SYNC_IMPORT');
+      expect(lowestSurvivorOf(user3Id).serverSeq).toBe(1);
+      expect(testState.operations.size).toBe(2 + opsPerUser + 1);
     });
 
     it('should delete old operations from all users', async () => {
@@ -2267,16 +3849,18 @@ describe('SyncService', () => {
 
       // Set up userSyncState with required fields for both users
       const cutoffTime = Date.now() - 50 * 24 * 60 * 60 * 1000;
+      seedFullStateOp(userId, 2, BigInt(cutoffTime - 1));
+      seedFullStateOp(user2Id, 3, BigInt(cutoffTime - 1));
       testState.userSyncStates.set(userId, {
         userId,
-        lastSeq: 1,
-        lastSnapshotSeq: 1,
+        lastSeq: 2,
+        lastSnapshotSeq: 2,
         snapshotAt: BigInt(Date.now()),
       });
       testState.userSyncStates.set(user2Id, {
         userId: user2Id,
-        lastSeq: 2,
-        lastSnapshotSeq: 2,
+        lastSeq: 3,
+        lastSnapshotSeq: 3,
         snapshotAt: BigInt(Date.now()),
       });
 
@@ -2291,10 +3875,10 @@ describe('SyncService', () => {
 
       expect(
         (await operationDownloadService.getOpsSinceWithSeq(userId, 0)).ops.length,
-      ).toBe(0);
+      ).toBe(1);
       expect(
         (await operationDownloadService.getOpsSinceWithSeq(user2Id, 0)).ops.length,
-      ).toBe(0);
+      ).toBe(1);
     });
 
     it('should delete stale devices', async () => {
@@ -2505,6 +4089,33 @@ describe('SyncService', () => {
     });
   });
 
+  describe('device touch routing', () => {
+    it('getOpsSinceWithSeq does not touch the device row — its other callers (upload piggyback, dedup retry) run right after the upload already upserted lastSeenAt', async () => {
+      const service = getSyncService();
+      const { prisma } = await import('../src/db');
+      const executeRawSpy = vi.mocked(prisma.$executeRaw);
+      executeRawSpy.mockClear();
+
+      await service.getOpsSinceWithSeq(userId, 0, clientId);
+      // The touch is fire-and-forget — give a stray one a tick to land.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(executeRawSpy).not.toHaveBeenCalled();
+    });
+
+    it('touchDevice() runs the device-row touch (wired to the download route only)', async () => {
+      const service = getSyncService();
+      const { prisma } = await import('../src/db');
+      const executeRawSpy = vi.mocked(prisma.$executeRaw);
+      executeRawSpy.mockClear();
+
+      service.touchDevice(userId, clientId);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(executeRawSpy).toHaveBeenCalled();
+    });
+  });
+
   describe('uploadOps + DeviceService user lookup', () => {
     it('should return all users with sync state', async () => {
       const service = getSyncService();
@@ -2636,19 +4247,27 @@ describe('SyncService', () => {
     it('should return REPAIR operations as restore points', async () => {
       const service = getSyncService();
 
-      await service.uploadOps(userId, clientId, [
-        {
-          id: uuidv7(),
-          clientId,
-          actionType: '[SP_ALL] Load(import) all data',
-          opType: 'REPAIR',
-          entityType: 'ALL',
-          payload: { globalConfig: {}, tasks: {} },
-          vectorClock: {},
-          timestamp: Date.now(),
-          schemaVersion: 1,
-        },
-      ]);
+      await service.uploadOps(
+        userId,
+        clientId,
+        [
+          {
+            id: uuidv7(),
+            clientId,
+            actionType: '[SP_ALL] Load(import) all data',
+            opType: 'REPAIR',
+            entityType: 'ALL',
+            payload: { globalConfig: {}, tasks: {} },
+            vectorClock: {},
+            timestamp: Date.now(),
+            schemaVersion: 1,
+            repairBaseServerSeq: 0,
+          },
+        ],
+        false,
+        undefined,
+        0,
+      );
 
       const restorePoints = await service.getRestorePoints(userId);
 

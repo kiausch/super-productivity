@@ -16,6 +16,7 @@ import {
 } from '../boards.model';
 import {
   buildComparator,
+  doesTaskMatchPanel,
   firstSpecificProjectId,
   isAllProjects,
   rewriteTagIdsForPanel,
@@ -51,6 +52,7 @@ import {
   moveProjectTaskToBacklogListAuto,
   moveProjectTaskToRegularListAuto,
 } from '../../project/store/project.actions';
+import { TaskAddEvent } from '../../tasks/add-task-bar/add-task-bar.component';
 
 @Component({
   selector: 'board-panel',
@@ -158,62 +160,12 @@ export class BoardPanelComponent {
     const orderedTasks: TaskCopy[] = [];
     const nonOrderedTasks: TaskCopy[] = [];
 
-    const allFilteredTasks = this.allTasks().filter((task) => {
-      let isTaskIncluded = true;
-      const taskTagIds = task.tagIds ?? [];
-      if (panelCfg.includedTagIds?.length) {
-        isTaskIncluded =
-          panelCfg.includedTagsMatch === 'any'
-            ? panelCfg.includedTagIds.some((tagId) => taskTagIds.includes(tagId))
-            : panelCfg.includedTagIds.every((tagId) => taskTagIds.includes(tagId));
-      }
-      if (panelCfg.excludedTagIds?.length) {
-        const hit =
-          panelCfg.excludedTagsMatch === 'all'
-            ? panelCfg.excludedTagIds.every((tagId) => taskTagIds.includes(tagId))
-            : panelCfg.excludedTagIds.some((tagId) => taskTagIds.includes(tagId));
-        isTaskIncluded = isTaskIncluded && !hit;
-      }
-
-      if (panelCfg.isParentTasksOnly) {
-        isTaskIncluded = isTaskIncluded && !task.parentId;
-      }
-
-      if (panelCfg.taskDoneState === BoardPanelCfgTaskDoneState.Done) {
-        isTaskIncluded = isTaskIncluded && task.isDone;
-      }
-
-      if (panelCfg.taskDoneState === BoardPanelCfgTaskDoneState.UnDone) {
-        isTaskIncluded = isTaskIncluded && !task.isDone;
-      }
-
-      if (
-        panelCfg.projectIds &&
-        panelCfg.projectIds.length > 0 &&
-        !isAllProjects(panelCfg.projectIds)
-      ) {
-        // TODO check parentId case thoroughly
-        isTaskIncluded = isTaskIncluded && panelCfg.projectIds.includes(task.projectId);
-      }
-
-      if (panelCfg.scheduledState === BoardPanelCfgScheduledState.Scheduled) {
-        isTaskIncluded = isTaskIncluded && !!(task.dueWithTime || task.dueDay);
-      }
-
-      if (panelCfg.scheduledState === BoardPanelCfgScheduledState.NotScheduled) {
-        isTaskIncluded = isTaskIncluded && !task.dueWithTime && !task.dueDay;
-      }
-
-      if (panelCfg.backlogState === BoardPanelCfgTaskTypeFilter.OnlyBacklog) {
-        isTaskIncluded = isTaskIncluded && this._isTaskInBacklog(task);
-      }
-
-      if (panelCfg.backlogState === BoardPanelCfgTaskTypeFilter.NoBacklog) {
-        isTaskIncluded = isTaskIncluded && !this._isTaskInBacklog(task);
-      }
-
-      return isTaskIncluded;
-    });
+    // Hoist the backlog predicate out of the filter callback so it's allocated
+    // once per recompute, not once per task.
+    const isInBacklog = (t: Readonly<TaskCopy>): boolean => this._isTaskInBacklog(t);
+    const allFilteredTasks = this.allTasks().filter((task) =>
+      doesTaskMatchPanel(task, panelCfg, isInBacklog),
+    );
 
     allFilteredTasks.forEach((task) => {
       const index = panelCfg.taskIds.indexOf(task.id);
@@ -309,14 +261,26 @@ export class BoardPanelComponent {
     this._checkBacklogState(panelCfg, task.id);
   }
 
-  async afterTaskAdd({
-    taskId,
-    isAddToBottom,
-  }: {
-    taskId: string;
-    isAddToBottom: boolean;
-  }): Promise<void> {
+  async afterTaskAdd({ taskId, isAddToBottom, isNewTask }: TaskAddEvent): Promise<void> {
     const panelCfg = this.panelCfg();
+
+    if (!isNewTask) {
+      const task = await this.store
+        .select(selectTaskById, { id: taskId })
+        .pipe(first())
+        .toPromise();
+      if (!task) {
+        return;
+      }
+
+      const newTagIds = unique(rewriteTagIdsForPanel(task.tagIds || [], panelCfg));
+
+      if (!fastArrayCompare(task.tagIds || [], newTagIds)) {
+        this.taskService.updateTags(task, newTagIds);
+      }
+      return;
+    }
+
     this.store.dispatch(
       BoardsActions.updatePanelCfgTaskIds({
         panelId: panelCfg.id,

@@ -1,6 +1,9 @@
 import { expect, Locator, Page } from '@playwright/test';
 import { BasePage } from './base.page';
 
+export const isProjectTasksRoute = (url: string): boolean =>
+  /\/#\/project\/[^/]+\/tasks(?:[/?#]|$)/.test(url);
+
 export class ProjectPage extends BasePage {
   readonly sidenav: Locator;
   readonly createProjectBtn: Locator;
@@ -144,6 +147,10 @@ export class ProjectPage extends BasePage {
 
     // Helper function to check if we're already on the project
     const isAlreadyOnProject = async (): Promise<boolean> => {
+      if (!isProjectTasksRoute(this.page.url())) {
+        return false;
+      }
+
       try {
         // Use page.evaluate for direct DOM check (most reliable)
         return await this.page.evaluate((name) => {
@@ -358,8 +365,15 @@ export class ProjectPage extends BasePage {
     let newProject;
     let projectFound = false;
 
-    // Check if .nav-children container exists after expansion
-    const navChildren = this.page.locator('.nav-children');
+    // Check if the Projects tree's .nav-children container exists after expansion.
+    // Scope it to that tree: every expanded tree (Tags, Notes, …) renders its own
+    // .nav-children, so an unscoped locator is a strict-mode violation as soon as
+    // a second one is open.
+    const navChildren = this.page
+      .locator('nav-list-tree')
+      .filter({ hasText: 'Projects' })
+      .first()
+      .locator('.nav-children');
     const navChildrenExists = await navChildren.count();
 
     if (navChildrenExists > 0) {
@@ -367,8 +381,8 @@ export class ProjectPage extends BasePage {
 
       try {
         // Primary approach: nav-child-item structure with nav-item button
-        newProject = this.page
-          .locator('.nav-children .nav-child-item nav-item button')
+        newProject = navChildren
+          .locator('.nav-child-item nav-item button')
           .filter({ hasText: projectName });
         await newProject.waitFor({ state: 'visible', timeout: 3000 });
         projectFound = true;

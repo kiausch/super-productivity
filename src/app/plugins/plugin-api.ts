@@ -19,6 +19,7 @@ import {
   PluginMenuEntryCfg,
   PluginNodeScriptRequest,
   PluginNodeScriptResult,
+  PluginRequestOptions,
   PluginShortcutCfg,
   PluginSidePanelBtnCfg,
   PluginWorkContextHeaderBtnCfg,
@@ -608,6 +609,26 @@ export class PluginAPI implements PluginAPIInterface {
   async clearOAuthToken(): Promise<void> {
     PluginLog.log(`Plugin ${this.#pluginId} requested OAuth token clear`);
     return this.#boundMethods.clearOAuthToken();
+  }
+
+  async setSecret(key: string, value: string): Promise<void> {
+    return this.#boundMethods.setSecret(key, value);
+  }
+
+  async getSecret(key: string): Promise<string | null> {
+    return this.#boundMethods.getSecret(key);
+  }
+
+  async deleteSecret(key: string): Promise<void> {
+    PluginLog.log(`Plugin ${this.#pluginId} requested secret delete`);
+    return this.#boundMethods.deleteSecret(key);
+  }
+
+  async request<T = unknown>(url: string, options?: PluginRequestOptions): Promise<T> {
+    PluginLog.log(
+      `Plugin ${this.#pluginId} requested host HTTP ${options?.method ?? 'GET'}`,
+    );
+    return this.#boundMethods.request<T>(url, options);
   }
 
   /**

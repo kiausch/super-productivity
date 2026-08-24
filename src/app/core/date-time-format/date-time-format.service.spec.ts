@@ -222,6 +222,11 @@ describe('DateTimeFormatService', () => {
 
       const formattedKoKr = service.formatDate(testDate, DateTimeLocales.ko_kr);
       expect(formattedKoKr).toBe('2000. 12. 31.');
+
+      // ISO 8601 option (mapped to the Swedish locale) must produce
+      // YYYY-MM-DD, see #6484
+      const formattedIso = service.formatDate(testDate, DateTimeLocales.sv);
+      expect(formattedIso).toBe('2000-12-31');
     });
   });
 
@@ -240,6 +245,76 @@ describe('DateTimeFormatService', () => {
 
       const formattedKoKr = service.formatTime(testTime, DateTimeLocales.ko_kr);
       expect(formattedKoKr).toBe('오후 2:00');
+
+      // ISO 8601 option (mapped to the Swedish locale) must use the 24-hour
+      // clock with a colon, see #6484
+      const formattedIso = service.formatTime(testTime, DateTimeLocales.sv);
+      expect(formattedIso).toBe('14:00');
+    });
+  });
+
+  describe('ISO 8601 locale (sv, #6484)', () => {
+    beforeEach(() => {
+      TestBed.resetTestingModule();
+      TestBed.configureTestingModule({
+        imports: [MatNativeDateModule],
+        providers: [
+          DateTimeFormatService,
+          { provide: DateAdapter, useClass: CustomDateAdapter },
+          {
+            provide: TranslateService,
+            useValue: { currentLang: 'en', defaultLang: 'en' },
+          },
+          provideMockStore({
+            initialState: {
+              globalConfig: {
+                ...DEFAULT_GLOBAL_CONFIG,
+                localization: {
+                  ...DEFAULT_GLOBAL_CONFIG.localization,
+                  dateTimeLocale: DateTimeLocales.sv,
+                },
+              },
+            },
+          }),
+        ],
+      });
+      service = TestBed.inject(DateTimeFormatService);
+    });
+
+    it('detects a year-first YYYY-MM-DD format and 24h clock', () => {
+      expect(service.dateFormat().raw).toBe('yyyy-MM-dd');
+      expect(service.is24HourFormat()).toBe(true);
+    });
+
+    it('round-trips an ISO date string through the detected format', () => {
+      const parsed = service.parseStringToDate('2026-02-12', service.dateFormat().raw);
+      expect(parsed?.getFullYear()).toBe(2026);
+      expect(parsed?.getMonth()).toBe(1);
+      expect(parsed?.getDate()).toBe(12);
+    });
+
+    it('updates text labels when the UI language changes without changing ISO formats', () => {
+      expect(service.currentLocale()).toBe(DateTimeLocales.sv);
+      expect(service.isoTextLocale()).toBe('en');
+
+      service.setUiLanguage('de');
+      TestBed.flushEffects();
+
+      expect(service.isoTextLocale()).toBe('de');
+      expect(service.currentLocale()).toBe(DateTimeLocales.sv);
+      expect(service.dateFormat().raw).toBe('yyyy-MM-dd');
+      expect(service.is24HourFormat()).toBe(true);
+    });
+
+    it('exposes the UI language as textLocale, tracking language changes', () => {
+      // Spelled-out weekday/month names must not render in Swedish under the
+      // sv sentinel (#8987 follow-up); textLocale resolves to the UI language.
+      expect(service.textLocale()).toBe('en');
+
+      service.setUiLanguage('de');
+      TestBed.flushEffects();
+
+      expect(service.textLocale()).toBe('de');
     });
   });
 
@@ -346,6 +421,10 @@ describe('DateTimeFormatService', () => {
       TestBed.flushEffects();
 
       expect(service.currentLocale()).toBe(DateTimeLocales.ja_jp);
+      expect(service.isoTextLocale()).toBeNull();
+      // Non-ISO options keep spelled-out names on the configured locale, so
+      // ja/ar/etc. still render their native month/weekday names.
+      expect(service.textLocale()).toBe(DateTimeLocales.ja_jp);
       expect(dateAdapter.format(testDate, TIME_FORMAT)).toBe('14:00');
     });
 

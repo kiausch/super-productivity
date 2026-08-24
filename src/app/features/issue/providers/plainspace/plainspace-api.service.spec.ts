@@ -101,24 +101,34 @@ describe('PlainspaceApiService', () => {
     expect(await p).toBeNull();
   });
 
-  it('patchTask$ PATCHes the given fields and maps scheduledAt back', async () => {
-    const p = firstValueFrom(
-      service.patchTask$(
-        'a',
-        { done: true, scheduledAt: '2026-01-02T09:00:00.000Z' },
-        cfg,
-      ),
-    );
+  it('patchTask$ PATCHes completion and maps its confirmation', async () => {
+    const p = firstValueFrom(service.patchTask$('a', { done: true }, cfg));
     const req = httpMock.expectOne(`${BASE}/tasks/a`);
     expect(req.request.method).toBe('PATCH');
-    expect(req.request.body).toEqual({
-      done: true,
-      scheduledAt: '2026-01-02T09:00:00.000Z',
-    });
-    req.flush({ task: spTask('a', 'space-1', true, '2026-01-02T09:00:00.000Z') });
+    expect(req.request.body).toEqual({ done: true });
+    req.flush({ task: spTask('a', 'space-1', true) });
     const issue = await p;
     expect(issue?.isDone).toBe(true);
-    expect(issue?.scheduledAt).toBe('2026-01-02T09:00:00.000Z');
+  });
+
+  it('patchTask$ reports a failed completion update as null', async () => {
+    const p = firstValueFrom(service.patchTask$('a', { done: true }, cfg));
+    httpMock
+      .expectOne(`${BASE}/tasks/a`)
+      .flush('boom', { status: 500, statusText: 'Server Error' });
+    expect(await p).toBeNull();
+  });
+
+  it('patchTask$ accepts a minimal completion confirmation', async () => {
+    const p = firstValueFrom(service.patchTask$('a', { done: true }, cfg));
+    httpMock.expectOne(`${BASE}/tasks/a`).flush({ task: { id: 'a', done: true } });
+    expect(await p).toEqual({ id: 'a', isDone: true });
+  });
+
+  it('patchTask$ rejects a malformed completion confirmation', async () => {
+    const p = firstValueFrom(service.patchTask$('a', { done: true }, cfg));
+    httpMock.expectOne(`${BASE}/tasks/a`).flush({ task: { id: 'a', done: 'yes' } });
+    expect(await p).toBeNull();
   });
 
   it('getSpaces$ maps the account spaces from /me', async () => {
@@ -145,6 +155,69 @@ describe('PlainspaceApiService', () => {
     expect(await p).toBeNull();
   });
 
+  it('getSpaceUrl$ resolves {host}/{slug} by matching the stored space id', async () => {
+    const p = firstValueFrom(service.getSpaceUrl$({ ...cfg, spaceId: 'p2' }));
+    const req = httpMock.expectOne(`${BASE}/me`);
+    req.flush({
+      email: 'a@b.c',
+      projects: [
+        { id: 'p1', name: 'One', slug: 'one', memberDisplayName: 'Me', role: 'admin' },
+        { id: 'p2', name: 'Two', slug: 'two', memberDisplayName: 'Me', role: 'member' },
+      ],
+    });
+    expect(await p).toBe('https://plainspace.org/two');
+  });
+
+  it('getSpaceUrl$ also matches the bound space by slug', async () => {
+    const p = firstValueFrom(service.getSpaceUrl$({ ...cfg, spaceId: 'two' }));
+    httpMock.expectOne(`${BASE}/me`).flush({
+      email: 'a@b.c',
+      projects: [
+        { id: 'p2', name: 'Two', slug: 'two', memberDisplayName: 'Me', role: 'member' },
+      ],
+    });
+    expect(await p).toBe('https://plainspace.org/two');
+  });
+
+  it('getSpaceUrl$ returns null when the space is not in the account', async () => {
+    const p = firstValueFrom(service.getSpaceUrl$({ ...cfg, spaceId: 'gone' }));
+    httpMock.expectOne(`${BASE}/me`).flush({ email: 'a@b.c', projects: [] });
+    expect(await p).toBeNull();
+  });
+
+  it('getSpaceUrl$ returns null on error (offline / invalid token)', async () => {
+    const p = firstValueFrom(service.getSpaceUrl$(cfg));
+    httpMock
+      .expectOne(`${BASE}/me`)
+      .flush('boom', { status: 401, statusText: 'Unauthorized' });
+    expect(await p).toBeNull();
+  });
+
+  it('getSpaceUrl$ returns null (no throw) on a malformed /me body', async () => {
+    const p = firstValueFrom(service.getSpaceUrl$({ ...cfg, spaceId: 'p2' }));
+    // 200 with a non-array `projects` — not caught by getMe$'s HTTP catchError.
+    httpMock.expectOne(`${BASE}/me`).flush({ email: 'a@b.c' });
+    expect(await p).toBeNull();
+  });
+
+  it('getSpaceUrl$ returns null when the matched space has a blank slug', async () => {
+    const p = firstValueFrom(service.getSpaceUrl$({ ...cfg, spaceId: 'p2' }));
+    httpMock.expectOne(`${BASE}/me`).flush({
+      email: 'a@b.c',
+      projects: [
+        { id: 'p2', name: 'Two', slug: '', memberDisplayName: 'Me', role: 'member' },
+      ],
+    });
+    expect(await p).toBeNull();
+  });
+
+  it('getSpaceUrl$ returns null without a request when host/spaceId are missing', async () => {
+    expect(
+      await firstValueFrom(service.getSpaceUrl$({ ...cfg, spaceId: null })),
+    ).toBeNull();
+    // httpMock.verify() in afterEach asserts no /me call was made.
+  });
+
   it('createSpace$ returns the new project id', async () => {
     const p = firstValueFrom(service.createSpace$('My Space', cfg));
     const req = httpMock.expectOne(`${BASE}/spaces`);
@@ -152,6 +225,27 @@ describe('PlainspaceApiService', () => {
     expect(req.request.body).toEqual({ name: 'My Space' });
     req.flush({ project: { id: 'proj-new' }, url: 'x', memberId: 'm' });
     expect((await p).id).toBe('proj-new');
+  });
+
+  it('createTask$ POSTs { spaceId, title } and maps the created task', async () => {
+    const p = firstValueFrom(service.createTask$('Buy milk', cfg));
+    const req = httpMock.expectOne(`${BASE}/tasks`);
+    expect(req.request.method).toBe('POST');
+    expect(req.request.headers.get('Authorization')).toBe('Bearer pat_test');
+    expect(req.request.body).toEqual({ spaceId: 'space-1', title: 'Buy milk' });
+    req.flush({ task: { ...spTask('new-1', 'space-1'), title: 'Buy milk' } });
+    const issue = await p;
+    expect(issue.id).toBe('new-1');
+    expect(issue.title).toBe('Buy milk');
+    expect(issue.isDone).toBe(false);
+  });
+
+  it('createTask$ lets errors propagate (so the auto-create effect can report)', async () => {
+    const p = firstValueFrom(service.createTask$('x', cfg));
+    httpMock
+      .expectOne(`${BASE}/tasks`)
+      .flush('boom', { status: 500, statusText: 'Server Error' });
+    await expectAsync(p).toBeRejected();
   });
 
   it('searchIssues$ filters my tasks by title', async () => {

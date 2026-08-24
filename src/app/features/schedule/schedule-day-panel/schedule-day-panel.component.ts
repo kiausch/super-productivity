@@ -34,6 +34,8 @@ import { ScheduleEvent } from '../schedule.model';
 import { GlobalConfigService } from '../../config/global-config.service';
 import { DEFAULT_GLOBAL_CONFIG } from '../../config/default-global-config.const';
 import { remindOptionToMilliseconds } from '../../tasks/util/remind-option-to-milliseconds';
+import { TranslatePipe } from '@ngx-translate/core';
+import { T } from '../../../t.const';
 
 const DEFAULT_MIN_DURATION = 15 * 60 * 1000;
 const SCROLL_DELAY_MS = 100;
@@ -57,12 +59,14 @@ interface DropTimeCalculation {
 @Component({
   selector: 'schedule-day-panel',
   standalone: true,
-  imports: [ScheduleWeekComponent],
+  imports: [ScheduleWeekComponent, TranslatePipe],
   styleUrl: './schedule-day-panel.component.scss',
   templateUrl: './schedule-day-panel.component.html',
   changeDetection: ChangeDetectionStrategy.OnPush,
 })
 export class ScheduleDayPanelComponent implements AfterViewInit, OnDestroy {
+  T: typeof T = T;
+
   @ViewChild('scheduleWeek', { read: ElementRef }) scheduleWeekRef!: ElementRef;
   @ViewChild('scheduleWeek', { read: ScheduleWeekComponent })
   scheduleWeekComponent!: ScheduleWeekComponent;
@@ -453,6 +457,12 @@ export class ScheduleDayPanelComponent implements AfterViewInit, OnDestroy {
     return null;
   }
 
+  // TODO replace with the schedule view's approach (scrollIntoView plus
+  // scroll-padding on the scroll container, see ScheduleComponent) so there is
+  // one implementation of "scroll to now" instead of two that can drift. This
+  // one is rect-based like the old schedule code was, but its enter animation
+  // (slideInFromRightAni) is translateX only, so it does not hit the transform
+  // overshoot that fix had.
   private _scrollToCurrentTime(): void {
     if (!this.scheduleWeekRef?.nativeElement) {
       Log.warn('[ScheduleDayPanel] No scheduleWeekRef available');

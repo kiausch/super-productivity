@@ -28,7 +28,6 @@ import {
   setCurrentTask,
   setSelectedTask,
   toggleStart,
-  toggleTaskHideSubTasks,
   unsetCurrentTask,
   updateTaskUi,
 } from './store/task.actions';
@@ -576,21 +575,21 @@ export class TaskService {
         .activeWorkContextType as WorkContextType;
 
       if (isBacklog) {
-        const doneBacklogTaskIds = await this._workContextService.doneBacklogTaskIds$
+        const undoneBacklogTaskIds = await this._workContextService.undoneBacklogTaskIds$
           .pipe(take(1))
           .toPromise();
-        if (!doneBacklogTaskIds) {
-          throw new Error('No doneBacklogTaskIds found');
+        if (!undoneBacklogTaskIds) {
+          throw new Error('No undoneBacklogTaskIds found');
         }
         this._store.dispatch(
           moveProjectTaskUpInBacklogList({
             taskId: id,
             workContextId,
-            doneBacklogTaskIds,
+            doneBacklogTaskIds: undoneBacklogTaskIds,
           }),
         );
       } else {
-        const doneTaskIds = await this._workContextService.doneTaskIds$
+        const undoneTaskIds = await this._workContextService.undoneTaskIds$
           .pipe(take(1))
           .toPromise();
         this._store.dispatch(
@@ -598,7 +597,7 @@ export class TaskService {
             taskId: id,
             workContextType,
             workContextId,
-            doneTaskIds,
+            doneTaskIds: undoneTaskIds,
           }),
         );
       }
@@ -630,21 +629,21 @@ export class TaskService {
 
       // this.
       if (isBacklog) {
-        const doneBacklogTaskIds = await this._workContextService.doneBacklogTaskIds$
+        const undoneBacklogTaskIds = await this._workContextService.undoneBacklogTaskIds$
           .pipe(take(1))
           .toPromise();
-        if (!doneBacklogTaskIds) {
-          throw new Error('No doneBacklogTaskIds found');
+        if (!undoneBacklogTaskIds) {
+          throw new Error('No undoneBacklogTaskIds found');
         }
         this._store.dispatch(
           moveProjectTaskDownInBacklogList({
             taskId: id,
             workContextId,
-            doneBacklogTaskIds,
+            doneBacklogTaskIds: undoneBacklogTaskIds,
           }),
         );
       } else {
-        const doneTaskIds = await this._workContextService.doneTaskIds$
+        const undoneTaskIds = await this._workContextService.undoneTaskIds$
           .pipe(take(1))
           .toPromise();
         this._store.dispatch(
@@ -652,7 +651,7 @@ export class TaskService {
             taskId: id,
             workContextType,
             workContextId,
-            doneTaskIds,
+            doneTaskIds: undoneTaskIds,
           }),
         );
       }
@@ -668,28 +667,28 @@ export class TaskService {
         .activeWorkContextType as WorkContextType;
 
       if (isBacklog) {
-        this._workContextService.doneBacklogTaskIds$
+        this._workContextService.undoneBacklogTaskIds$
           .pipe(take(1))
-          .subscribe((doneBacklogTaskIds) => {
-            if (!doneBacklogTaskIds) {
-              throw new Error('No doneBacklogTaskIds found');
+          .subscribe((undoneBacklogTaskIds) => {
+            if (!undoneBacklogTaskIds) {
+              throw new Error('No undoneBacklogTaskIds found');
             }
             this._store.dispatch(
               moveProjectTaskToTopInBacklogList({
                 taskId: id,
                 workContextId,
-                doneBacklogTaskIds,
+                doneBacklogTaskIds: undoneBacklogTaskIds,
               }),
             );
           });
       } else {
-        this._workContextService.doneTaskIds$.pipe(take(1)).subscribe((doneTaskIds) => {
+        this._workContextService.undoneTaskIds$.pipe(take(1)).subscribe((undoneTaskIds) => {
           this._store.dispatch(
             moveTaskToTopInTodayList({
               taskId: id,
               workContextType,
               workContextId,
-              doneTaskIds,
+              doneTaskIds: undoneTaskIds,
             }),
           );
         });
@@ -706,28 +705,28 @@ export class TaskService {
         .activeWorkContextType as WorkContextType;
 
       if (isBacklog) {
-        this._workContextService.doneBacklogTaskIds$
+        this._workContextService.undoneBacklogTaskIds$
           .pipe(take(1))
-          .subscribe((doneBacklogTaskIds) => {
-            if (!doneBacklogTaskIds) {
-              throw new Error('No doneBacklogTaskIds found');
+          .subscribe((undoneBacklogTaskIds) => {
+            if (!undoneBacklogTaskIds) {
+              throw new Error('No undoneBacklogTaskIds found');
             }
             this._store.dispatch(
               moveProjectTaskToBottomInBacklogList({
                 taskId: id,
                 workContextId,
-                doneBacklogTaskIds,
+                doneBacklogTaskIds: undoneBacklogTaskIds,
               }),
             );
           });
       } else {
-        this._workContextService.doneTaskIds$.pipe(take(1)).subscribe((doneTaskIds) => {
+        this._workContextService.undoneTaskIds$.pipe(take(1)).subscribe((undoneTaskIds) => {
           this._store.dispatch(
             moveTaskToBottomInTodayList({
               taskId: id,
               workContextType,
               workContextId,
-              doneTaskIds,
+              doneTaskIds: undoneTaskIds,
             }),
           );
         });
@@ -1043,6 +1042,27 @@ export class TaskService {
     );
   }
 
+  scheduleForTodayById(id: string): void {
+    this.getByIdOnce$(id)
+      .pipe(first())
+      .subscribe((task) => {
+        if (task && !task.isDone && !this._isScheduledToday(task)) {
+          this._store.dispatch(
+            TaskSharedActions.planTasksForToday({
+              taskIds: [task.id],
+              today: this._dateService.todayStr(),
+              startOfNextDayDiffMs: this._dateService.getStartOfNextDayDiffMs(),
+              parentTaskMap: { [task.id]: task.parentId },
+            }),
+          );
+        }
+      });
+  }
+
+  private _isScheduledToday(task: Task): boolean {
+    return task.dueDay === this._dateService.todayStr();
+  }
+
   // ------
   getByIdOnce$(id: string): Observable<Task> {
     return this._store.pipe(select(selectTaskById, { id }), take(1));
@@ -1117,16 +1137,25 @@ export class TaskService {
     this.updateUi(id, { _hideSubTasksMode: undefined });
   }
 
+  hideSubTasks(id: string): void {
+    this.updateUi(id, { _hideSubTasksMode: HideSubTasksMode.HideAll });
+  }
+
   toggleSubTaskMode(
     taskId: string,
     isShowLess: boolean = true,
     isEndless: boolean = false,
   ): void {
-    this._store.dispatch(toggleTaskHideSubTasks({ taskId, isShowLess, isEndless }));
-  }
-
-  hideSubTasks(id: string): void {
-    this.updateUi(id, { _hideSubTasksMode: HideSubTasksMode.HideAll });
+    // Simplified version: toggle between showing all (undefined) and hiding all (HideAll)
+    this.getByIdOnce$(taskId)
+      .pipe(first())
+      .subscribe((task) => {
+        const newMode =
+          task._hideSubTasksMode === undefined
+            ? HideSubTasksMode.HideAll
+            : undefined;
+        this.updateUi(taskId, { _hideSubTasksMode: newMode });
+      });
   }
 
   async convertToMainTask(task: Task): Promise<void> {

@@ -42,7 +42,11 @@ import {
   CollapsibleComponent,
   GROUP_NAV_SELECTOR,
 } from '../../../ui/collapsible/collapsible.component';
-import { findAdjacentFocusable } from '../../../util/find-adjacent-focusable';
+import {
+  findAdjacentFocusable,
+  findLastTaskInSubtree,
+  findNextTaskAfterSubtree,
+} from '../../../util/find-adjacent-focusable';
 import { TaskAttachmentService } from '../task-attachment/task-attachment.service';
 import { DialogEditTaskAttachmentComponent } from '../task-attachment/dialog-edit-attachment/dialog-edit-task-attachment.component';
 import { ProjectService } from '../../project/project.service';
@@ -71,7 +75,11 @@ import { DateService } from '../../../core/date/date.service';
 import { isTouchActive } from '../../../util/input-intent';
 import { IS_HYBRID_DEVICE } from '../../../util/is-mouse-primary';
 import { DRAG_DELAY_FOR_TOUCH } from '../../../app.constants';
-import { KeyboardConfig } from '@sp/keyboard-config';
+import {
+  EMPTY_KEYBOARD_CONFIG,
+  KeyboardConfig,
+  keyboardConfigOrEmpty,
+} from '@sp/keyboard-config';
 import { DialogScheduleTaskComponent } from '../../planner/dialog-schedule-task/dialog-schedule-task.component';
 import { PlannerActions } from '../../planner/store/planner.actions';
 import { PlannerService } from '../../planner/planner.service';
@@ -113,6 +121,7 @@ import {
   AddSubtaskInputCloseReason,
 } from '../add-subtask-input/add-subtask-input.component';
 import { AddSubtaskInputService } from '../add-subtask-input/add-subtask-input.service';
+import { getSubTaskTimeLeftForDisplay } from '../util/get-sub-task-time-left-for-display';
 
 @Component({
   selector: 'task',
@@ -124,7 +133,7 @@ import { AddSubtaskInputService } from '../add-subtask-input/add-subtask-input.s
   host: {
     '[id]': 'taskIdWithPrefix()',
     '[attr.data-task-id]': 'task().id',
-    '[tabindex]': '1',
+    '[tabindex]': '0',
     '[class.isDone]': 'task().isDone',
     '[class.isCurrent]': 'isCurrent()',
     '[class.isSelected]': 'isSelected()',
@@ -230,7 +239,7 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
     return 'chat';
   });
 
-  isTodayListActive = computed(() => this.workContextService.isTodayList);
+  isTodayListActive = computed(() => this.workContextService.isTodayListSignal());
   taskIdWithPrefix = computed(() => 't-' + this.task().id);
   isRepeatTaskCreatedToday = computed(
     () => !!(this.task().repeatCfgId && this._dateService.isToday(this.task().created)),
@@ -285,6 +294,11 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
     const t = this.task();
     return (t.timeEstimate && (t.timeSpent / t.timeEstimate) * 100) || 0;
   });
+
+  // Derived from the pair rather than rounded on its own — see the helper's doc. #9190
+  subTaskTimeLeft = computed<number>(() =>
+    getSubTaskTimeLeftForDisplay(this.task().subTasks),
+  );
 
   // Checklist progress derived from markdown checklist in task notes (null = no checklist)
   checklistProgress = computed<ChecklistProgress | null>(() =>
@@ -503,7 +517,7 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
     }
 
     // Dev-time sanity check: TODAY_TAG should NEVER be in task.tagIds (virtual tag pattern)
-    // Membership is determined by task.dueDay. See: docs/ai/today-tag-architecture.md
+    // Membership is determined by task.dueDay. See: ARCHITECTURE-DECISIONS.md Decision #2
     if (!environment.production) {
       if (this.task().tagIds.includes(TODAY_TAG.id)) {
         throw new Error('Task should not have TODAY_TAG in tagIds - it is a virtual tag');
@@ -695,6 +709,13 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
     move: (id: string, parentId: string | undefined, isBacklog: boolean) => void,
   ): void {
     const t = this.task();
+    // Top-level done tasks in the main list are ordered by completion date, so
+    // a manual reorder can't take effect — skip it to avoid emitting a spurious
+    // taskIds-reorder op that would sync to other devices. Done subtasks and
+    // backlog tasks are not auto-sorted, so they stay reorderable.
+    if (t.isDone && !t.parentId && !this.isBacklog()) {
+      return;
+    }
     move(t.id, t.parentId, this.isBacklog());
     // timeout required to let changes take place
     setTimeout(() => this.focusSelf());
@@ -793,14 +814,6 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
     if (t.projectId && !t.parentId) {
       this.focusPrevious(true);
       this.moveToBacklog();
-    }
-  }
-
-  moveToTodayWithFocus(): void {
-    const t = this.task();
-    if (t.projectId) {
-      this.focusNext(true, true);
-      this.moveToToday();
     }
   }
 
@@ -939,7 +952,22 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
       // Return focus to the task the draft was opened from (which may be a
       // subtask) so keyboard navigation continues from there after cancelling.
       this._refocusTaskAfterDraftCancel(originTaskId);
+    } else if (reason === 'prev' || reason === 'next') {
+      this._focusFromClosedSubtaskInput(reason);
     }
+  }
+
+  private _focusFromClosedSubtaskInput(direction: 'prev' | 'next'): void {
+    // The input follows the rendered subtask list. Its previous row is therefore
+    // the last visible subtask (or the parent), while its next row follows the
+    // entire parent subtree in document order.
+    window.setTimeout(() => {
+      const host = this._elementRef.nativeElement as HTMLElement;
+      const lastRow = findLastTaskInSubtree(host);
+      const target =
+        direction === 'prev' ? lastRow : (findNextTaskAfterSubtree(host) ?? lastRow);
+      target.focus();
+    });
   }
 
   private _refocusTaskAfterDraftCancel(taskId: string | null): void {
@@ -1247,7 +1275,9 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
       setTimeout(() => this.focusNext(true));
     } else {
       forkJoin([
-        this._taskRepeatCfgService.getTaskRepeatCfgById$(t.repeatCfgId).pipe(first()),
+        this._taskRepeatCfgService
+          .getTaskRepeatCfgByIdAllowUndefined$(t.repeatCfgId)
+          .pipe(first()),
         this._taskService.getTasksWithSubTasksByRepeatCfgId$(t.repeatCfgId).pipe(first()),
         this._taskService.getArchiveTasksForRepeatCfgId(t.repeatCfgId),
         this._projectService.getByIdOnce$(projectId),
@@ -1265,6 +1295,15 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
                 nonArchiveInstancesWithSubTasks,
                 archiveInstances,
               });
+
+              // Repeat config was deleted (e.g. via cross-client sync) but the task
+              // still references it — treat it as a plain task move instead of
+              // crashing on the missing config. (#8715)
+              if (!reminderCfg) {
+                this._taskService.moveToProject(this.task(), projectId);
+                setTimeout(() => this.focusNext(true));
+                return EMPTY;
+              }
 
               // if there is only a single instance (probably just created) than directly update the task repeat cfg
               if (
@@ -1338,13 +1377,42 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
     }
   }
 
-  moveToToday(): void {
-    const t = this.task();
-    if (t.projectId) {
-      // Moving to the regular list is a list-position change only; it must not
-      // schedule the task for today (#8592).
-      this._projectService.moveTaskToTodayList(t.id, t.projectId);
+  /**
+   * `taskScheduleToday` (Shift+T, "Schedule task for today"). Schedules only —
+   * it must never change list position, because #8592 asked for the
+   * backlog→regular move to leave the schedule alone via BOTH the context menu
+   * and this shortcut. Keeping the two intents apart is what stops #8592 and
+   * #9563 from taking turns being broken; the context menu's own moveToToday()
+   * owns the position-only move.
+   *
+   * A backlog task does not need the move to land on Today: membership is
+   * computed from dueDay/dueWithTime alone (computeOrderedTaskIdsForToday),
+   * never from project.backlogTaskIds.
+   */
+  scheduleForToday(): void {
+    // Nothing to do, and doing it anyway is destructive: planTasksForToday
+    // clears remindAt unconditionally, so this would drop the reminder of a
+    // task due at a time today. The "Add to Today" button hides itself in this
+    // state for the same reason.
+    if (this.isScheduledToday()) {
+      return;
     }
+    // Completion never synthesizes a dueDay (see task-related-model.effects.ts):
+    // done tasks reach Today's Done list via isDone, and dating one instead
+    // inflates the daily summary's done count for today.
+    if (this.task().isDone) {
+      return;
+    }
+    this.addToMyDay();
+  }
+
+  scheduleForTodayWithFocus(): void {
+    this._storeNextFocusEl();
+    this.scheduleForToday();
+    // Same focus handling as the sibling schedule shortcuts: keep focus on the
+    // task, and only advance if scheduling removed the row from this list (the
+    // Planner/work-view overdue panels).
+    this.focusSelfOrNextIfNotPossible();
   }
 
   trackByProjectId(i: number, project: Project): string {
@@ -1383,9 +1451,9 @@ export class TaskComponent implements OnDestroy, AfterViewInit {
 
   get kb(): KeyboardConfig {
     if (isTouchActive()) {
-      return {} as KeyboardConfig;
+      return EMPTY_KEYBOARD_CONFIG;
     }
-    return (this._configService.cfg()?.keyboard as KeyboardConfig) || {};
+    return keyboardConfigOrEmpty(this._configService.cfg()?.keyboard as KeyboardConfig);
   }
 
   protected readonly ICAL_TYPE = ICAL_TYPE;
